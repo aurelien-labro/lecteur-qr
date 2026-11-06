@@ -204,6 +204,10 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
 .stack { display: grid; gap: 10px; }
 .keep { margin: 0; font-size: .8rem; color: var(--muted); padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
 .keep.ok { color: var(--accent); background: var(--accent-soft); }
+.check { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; background: var(--surface-2);
+  font-size: .8rem; color: var(--muted); cursor: pointer; }
+.check input { flex: none; width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--accent); }
+.check b { color: var(--fg); }
 .tree .toggle { display: inline-flex; align-items: center; gap: 6px; }
 .tree .toggle svg { width: 16px; height: 16px; flex: none; }
 @media (max-width: 520px) { .tree .toggle span { display: none; } .tree .toggle { padding: 7px; } }
@@ -232,6 +236,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
       </div>
       <ul class="tree" id="acctTree"></ul>
       <p class="keep" id="keepNote" hidden></p>
+      <label class="check"><input type="checkbox" id="autoSend"><span><b>Envoi automatique.</b> Quand la caméra lit un QR et qu'un seul compte correspond, SoWeSign s'ouvre et le code est envoyé sans clic. SoWeSign valide dès que le code est bon : cela signe ta présence. Jamais plusieurs comptes pour un même QR. Le navigateur peut bloquer l'ouverture automatique (autorise les pop-ups pour ce site et « toujours autoriser » pour lqr) : teste avec un QR quelconque.</span></label>
       <form class="add" id="acctForm">
         <span class="eyebrow">Connecter un autre compte</span>
         <label>Nom <input id="acctNew" required maxlength="40" placeholder="Ex. Agence Lyon, Marie…" autocomplete="off"></label>
@@ -305,7 +310,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
           <button class="link" id="acctManage" type="button" aria-haspopup="dialog">Gérer</button>
         </div>
         <ul class="acct-list" id="acctList"></ul>
-        <p class="panel-note">Touche une fiche pour ouvrir la session SoWeSign de ce compte.</p>
+        <p class="panel-note">Touche une fiche pour ouvrir la session SoWeSign de ce compte. Envoyer un code signe ta présence : SoWeSign valide dès que le code est bon.</p>
       </section>
     </section>
 
@@ -345,7 +350,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
     </aside>
   </main>
 
-  <p class="foot">Tout est traité sur cet appareil. Rien ne part vers SoWeSign sans un clic sur « Envoyer ».</p>
+  <p class="foot">Tout est traité sur cet appareil. Rien ne part vers SoWeSign sans ton clic, sauf si tu actives l'envoi automatique (dans « Gérer »).</p>
 </div>
 <div class="toast" id="toast" role="status"></div>
 
@@ -357,6 +362,8 @@ const ctx = canvas.getContext("2d", { willReadFrequently: true });
 const KEY = "lecteur-qr-historique";   // historique d'avant les comptes : repris par le premier compte
 const ACCTS = "lecteur-qr-comptes";
 const SWS = "https://app.sowesign.com/";   // lien SoWeSign par défaut de chaque compte
+const SPAN = 10 * 60 * 1000;               // un code déjà envoyé reste « récent » 10 minutes
+const AUTO = "lecteur-qr-envoi-auto";      // réglage : envoi automatique après un scan de la caméra
 const COLORS = ["#0b7a5a", "#2f6fde", "#b0451a", "#8a3fd1", "#c2185b", "#00838f", "#7a6a00"];
 let stream = null, last = "", lastAt = 0, torchOn = false;
 let history = [], accounts = [];
@@ -366,6 +373,7 @@ let history = [], accounts = [];
 const histKey = id => KEY + ":" + id;
 const readJSON = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
 const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+let autoSend = readJSON(AUTO) === true;
 
 function loadAccounts() {
   const s = readJSON(ACCTS) || {};
@@ -468,7 +476,8 @@ function launch(url, a) {
 }
 
 // Un simple code (pas un lien) est transmis à l'extension du navigateur : dans l'adresse (#lqr=), ou ?lqr= pour un
-// lien Android, qui ne peut pas porter de #. L'extension le remplit dans le champ choisi, sans jamais valider.
+// lien Android, qui ne peut pas porter de #. L'extension le remplit dans le champ choisi ; SoWeSign valide la présence
+// dès que le code est correct, donc envoyer un code revient à signer.
 const isCode = s => /^[\w.-]{1,64}$/.test(s);
 
 // La version web de SoWeSign ne demande qu'un code à saisir : le scan du QR n'existe que dans leur application mobile.
@@ -538,7 +547,12 @@ function closeSws() { editing = null; $("swsForm").hidden = true; $("acctForm").
 
 const currentScan = () => $("value").hidden ? "" : $("value").textContent;
 // scan = "" ouvre simplement la session du compte (en cas de souci), sans code
-function openSws(a, scan = currentScan()) {
+function openSws(a, scan = currentScan(), auto = false) {
+  // Un QR sert à une seule personne présente : un code déjà envoyé à un autre compte demande une confirmation
+  if (scan && !auto) {
+    const other = accounts.find(x => x !== a && x.sent?.text === scan.slice(0, 200) && Date.now() - x.sent.at < SPAN);
+    if (other && !confirm("Ce code a déjà été envoyé à « " + other.name + " ». Un QR est fait pour une seule personne présente.\nL'envoyer aussi à « " + a.name + " » ?")) return;
+  }
   // Un QR SoWeSign (lien vers le même site que le compte) est ouvert tel quel ; sinon on ouvre le lien du compte
   let target = a.sws.replaceAll("{scan}", encodeURIComponent(scan));
   try { if (new URL(scan).origin === new URL(target).origin) target = scan; } catch {}
@@ -549,19 +563,38 @@ function openSws(a, scan = currentScan()) {
   // Dernier envoi et dernière ouverture de la session, séparés : ouvrir la session ne fait pas perdre le code à renvoyer
   if (scan) a.sent = { text: scan.slice(0, 200), at: Date.now() }; else a.opened = Date.now();
   saveAccounts(); renderAccounts();
-  toast("SoWeSign ouvert pour « " + a.name + " »" + (where(a) ? " dans " + where(a) : "")
+  toast("SoWeSign ouvert pour « " + a.name + " »" + (where(a) ? " dans " + where(a) : "") + (auto ? " — envoi automatique" : "")
     + (scan && !code && target !== scan ? " — aucun code reconnu dans ce QR, contenu copié" : ""));
+}
+
+// Comptes qui peuvent recevoir ce scan : ceux dont le mot-clé est reconnu, sinon tous les comptes SoWeSign si le QR
+// contient un code ou un lien SoWeSign. « sure » : un seul choix possible.
+function routeOptions(text) {
+  const hits = matchAccounts(text), sws = /sowesign/i.test(text) || !!extractCode(text);
+  const options = hits.length ? hits : sws ? connected().filter(a => a.sws) : [];
+  return { hits, options, sure: hits.length === 1 || (!hits.length && options.length === 1) };
+}
+
+// Envoi automatique (réglage, désactivé par défaut) : seulement pour un scan de la caméra, et seulement s'il n'y a qu'UN
+// compte possible. Un QR sert à une seule personne présente : jamais plusieurs comptes pour un même QR, jamais un code
+// déjà envoyé, jamais deux fois de suite sur le même compte en moins de 2 minutes (le QR change, la caméra le revoit).
+function autoSendScan(text) {
+  if (!autoSend) return;
+  const { options, sure } = routeOptions(text), now = Date.now();
+  if (!sure || options.length !== 1) return;
+  const a = options[0];
+  if (accounts.some(x => x.sent?.text === text.slice(0, 200) && now - x.sent.at < SPAN)) return;
+  if (a.sent && now - a.sent.at < 2 * 60 * 1000) return;
+  openSws(a, text, true);
 }
 
 // Après un scan : l'organisme est reconnu → un bouton pour le bon compte ; sinon on propose de choisir
 function renderRoute(text) {
   const box = $("route"), btns = $("routeBtns");
   // Un QR qui ne contient qu'un code (« Dzb ») n'a pas le nom de l'organisme : on propose les comptes SoWeSign
-  const hits = matchAccounts(text), sws = /sowesign/i.test(text) || !!extractCode(text);
-  const options = hits.length ? hits : sws ? connected().filter(a => a.sws) : [];
+  const { hits, options, sure } = routeOptions(text);   // sure : un seul choix possible, bouton principal
   box.hidden = !options.length;
   if (box.hidden) return;
-  const sure = hits.length === 1 || (!hits.length && options.length === 1);   // un seul choix possible : bouton principal
   box.classList.toggle("unknown", !sure && !hits.length);
   $("routeTitle").textContent = hits.length === 1 ? "Organisme reconnu : " + hits[0].name
     : hits.length ? "Plusieurs comptes reconnaissent ce QR"
@@ -805,7 +838,7 @@ function record(text, at) {
   loadHistory(); renderHistory(); renderAccounts();
 }
 
-function found(text) {
+function found(text, live = false) {   // live : scan de la caméra (pas une image importée ni collée)
   const now = Date.now();
   $("finder").classList.add("hit");
   setTimeout(() => $("finder").classList.remove("hit"), 450);
@@ -815,6 +848,7 @@ function found(text) {
   showResult(text);
   record(text, now);
   if (connectedCount() > 1) toast("Enregistré sur " + connectedCount() + " comptes");
+  if (live) autoSendScan(text);
 }
 
 async function listCams() {
@@ -994,7 +1028,7 @@ async function tick() {
   if (detector && video.readyState >= 2 && vw) {
     try {
       const codes = await detector.detect(video);
-      if (codes[0]?.rawValue) found(codes[0].rawValue);
+      if (codes[0]?.rawValue) found(codes[0].rawValue, true);
     } catch { detector = null; }
   } else if (video.readyState >= 2 && vw) {
     let sx = 0, sy = 0, sw = vw, sh = vh;
@@ -1010,7 +1044,7 @@ async function tick() {
     // En direct : image brute à chaque tour, version améliorée un tour sur trois pour ne pas chauffer le téléphone
     let code = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
     if (!code && tries++ % 3 === 0) code = jsQR(enhance(img, tries % 2), w, h, { inversionAttempts: "dontInvert" });
-    if (code && code.data) found(code.data);
+    if (code && code.data) found(code.data, true);
   }
   setTimeout(() => requestAnimationFrame(tick), detector ? 60 : 90);
 }
@@ -1060,6 +1094,11 @@ $("clear").addEventListener("click", () => {
 });
 document.addEventListener("visibilitychange", () => { if (document.hidden && stream) stop(); });
 
+$("autoSend").checked = autoSend;
+$("autoSend").addEventListener("change", e => {
+  autoSend = e.target.checked; writeJSON(AUTO, autoSend);
+  toast(autoSend ? "Envoi automatique activé : un scan de la caméra signe pour le seul compte correspondant" : "Envoi automatique désactivé");
+});
 $("acctManage").addEventListener("click", () => { renderAccounts(); keepConnected(); $("acctDialog").showModal(); });
 $("acctClose").addEventListener("click", () => $("acctDialog").close());
 $("acctDialog").addEventListener("close", closeSws);

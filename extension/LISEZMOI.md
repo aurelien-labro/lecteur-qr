@@ -1,6 +1,8 @@
 # Extension « Lecteur QR → SoWeSign »
 
-Remplit dans SoWeSign le code scanné par le Lecteur QR, et **prévient quand la session d'un compte tombe**. Elle ne valide jamais et ne se connecte jamais : tu envoies toi-même le formulaire et tu tapes toi-même tes codes de connexion.
+Remplit dans SoWeSign le code scanné par le Lecteur QR, et **prévient quand la session d'un compte tombe**. Elle ne se connecte jamais : tu tapes toi-même tes codes de connexion.
+
+> **Important : remplir le code, c'est signer.** SoWeSign valide la présence dès que le code est correct, sans bouton. L'extension ne clique sur rien, mais elle remplit le code uniquement quand il vient du Lecteur QR (après ton clic, ou l'envoi automatique si tu l'as activé) ou quand tu le colles toi-même. Un QR sert à une seule personne présente : ne l'envoie pas à plusieurs comptes.
 
 Une extension s'installe par navigateur (ou par profil de navigateur) : un navigateur = un compte SoWeSign, qui reste connecté avec ses propres cookies.
 

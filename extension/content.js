@@ -1,6 +1,8 @@
 // Lecteur QR → SoWeSign
 // Reçoit le code scanné (adresse « #lqr=CODE » ou « ?lqr=CODE », ou collé à la main) et le met dans le champ
-// que tu as choisi. Il ne valide jamais : c'est toi qui envoies le formulaire SoWeSign.
+// que tu as choisi. Il ne clique sur aucun bouton, mais SoWeSign valide la présence dès que le code est correct :
+// remplir le code revient donc à signer. Il ne remplit que sur ordre de l'utilisateur (le code vient du Lecteur QR ou
+// est collé à la main), jamais de lui-même.
 // Il surveille aussi la session : quand SoWeSign affiche sa page de connexion, il prévient (badge + notification).
 // Il ne se connecte jamais et ne garde pas la session en vie : il te prévient, tu te reconnectes toi-même.
 (() => {
@@ -56,7 +58,7 @@
     const code = pending.code;
     fill(input, code);
     pending = null; open = true;
-    message = "Code « " + code + " » rempli. Vérifie, puis envoie toi-même.";
+    message = "Code « " + code + " » rempli. SoWeSign valide la présence dès que le code est correct.";
     await store.remove(PENDING);
     render();
     return true;

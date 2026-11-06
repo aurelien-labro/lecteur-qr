@@ -130,6 +130,34 @@ a.btn { text-decoration: none; color: inherit; }
   background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-weight: 700; font-size: .9rem; transition: .2s; pointer-events: none; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .foot { text-align: center; color: var(--muted); font-size: .8rem; }
+
+/* Comptes : plusieurs comptes connectés en même temps, rangés en branches (parent > enfants) */
+.top-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.acct { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 220px; background: var(--surface); border: 1px solid var(--line);
+  padding: 4px 12px 4px 4px; border-radius: 999px; cursor: pointer; font-weight: 700; font-size: .85rem; }
+.acct span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  color: #fff; font-weight: 800; font-size: .8rem; text-transform: uppercase; }
+@media (max-width: 520px) { .status #statusText { display: none; } .status { padding: 8px; } }
+
+dialog.sheet { border: 1px solid var(--line); border-radius: var(--radius); padding: 0; width: min(440px, calc(100vw - 32px));
+  background: var(--surface); color: var(--fg); box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
+.sheet-body { padding: 18px; display: grid; gap: 14px; }
+.sheet h2 { margin: 0; font-size: 1.05rem; }
+.tree { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 50dvh; overflow: hidden auto; min-width: 0; }
+.tree li { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.tree .link { flex: none; }
+.tree .pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; background: none; border: 0; text-align: left;
+  padding: 8px; border-radius: 10px; cursor: pointer; }
+.tree .pick:hover { background: var(--surface-2); }
+.tree .pick[aria-current="true"] { background: var(--accent-soft); }
+.tree .branch { color: var(--muted); font-family: var(--mono); white-space: pre; flex: none; }
+.tree .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.tree .meta { font-size: .75rem; color: var(--muted); flex: none; }
+.add { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.add input, .add select { font: inherit; color: inherit; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%; }
+.add label { display: grid; gap: 4px; font-size: .8rem; font-weight: 700; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -141,8 +169,29 @@ a.btn { text-decoration: none; color: inherit; }
       </span>
       Lecteur QR
     </div>
-    <span class="status" id="status"><span class="dot"></span><span id="statusText">En pause</span></span>
+    <div class="top-right">
+      <span class="status" id="status"><span class="dot"></span><span id="statusText">En pause</span></span>
+      <button class="acct" id="acctBtn" type="button" aria-haspopup="dialog" title="Changer de compte">
+        <span class="avatar" id="acctAvatar"></span><span id="acctName"></span>
+      </button>
+    </div>
   </header>
+
+  <dialog class="sheet" id="acctDialog" aria-labelledby="acctTitle">
+    <div class="sheet-body">
+      <div class="panel-head">
+        <h2 id="acctTitle">Comptes connectés <span class="chip" id="acctCount"></span></h2>
+        <button class="link" id="acctClose" type="button">Fermer</button>
+      </div>
+      <ul class="tree" id="acctTree"></ul>
+      <form class="add" id="acctForm">
+        <span class="eyebrow">Connecter un autre compte</span>
+        <label>Nom <input id="acctNew" required maxlength="40" placeholder="Ex. Agence Lyon, Marie…" autocomplete="off"></label>
+        <label>Branche <select id="acctParent"></select></label>
+        <button class="btn primary" type="submit">Ajouter et basculer</button>
+      </form>
+    </div>
+  </dialog>
 
   <main class="grid">
     <section class="scanner" aria-label="Scanner">
@@ -226,10 +275,111 @@ a.btn { text-decoration: none; color: inherit; }
 const $ = id => document.getElementById(id);
 const video = $("video"), canvas = document.createElement("canvas");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
-const KEY = "lecteur-qr-historique";
+const KEY = "lecteur-qr-historique";   // historique d'avant les comptes : repris par le premier compte
+const ACCTS = "lecteur-qr-comptes";
+const COLORS = ["#0b7a5a", "#2f6fde", "#b0451a", "#8a3fd1", "#c2185b", "#00838f", "#7a6a00"];
 let stream = null, last = "", lastAt = 0, torchOn = false;
-let history = [];
-try { history = JSON.parse(localStorage.getItem(KEY)) || []; } catch {}
+let history = [], accounts = [], activeId = null;
+
+// Comptes : tous restent connectés (enregistrés sur l'appareil), un seul est actif à la fois.
+// Chaque compte peut avoir un compte parent, ce qui forme des branches (ex. Entreprise > Agence > Employé).
+const histKey = id => KEY + ":" + id;
+const readJSON = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+function loadAccounts() {
+  const s = readJSON(ACCTS) || {};
+  accounts = Array.isArray(s.accounts) ? s.accounts : [];
+  activeId = s.activeId;
+  if (!accounts.length) {
+    const id = crypto.randomUUID?.() || String(Date.now());
+    accounts = [{ id, name: "Principal", parent: null, color: COLORS[0] }];
+    writeJSON(histKey(id), readJSON(KEY) || []);
+    try { localStorage.removeItem(KEY); } catch {}
+  }
+  if (!accounts.some(a => a.id === activeId)) activeId = accounts[0].id;
+  saveAccounts();
+}
+function saveAccounts() { writeJSON(ACCTS, { accounts, activeId }); }
+function loadHistory() { history = readJSON(histKey(activeId)) || []; }
+const active = () => accounts.find(a => a.id === activeId);
+
+// Liste à plat dans l'ordre de l'arbre, avec le dessin des branches (├─ └─ │)
+function tree(parent = null, prefix = "", out = []) {
+  const kids = accounts.filter(a => a.parent === parent);
+  kids.forEach((a, i) => {
+    const lastKid = i === kids.length - 1;
+    out.push({ a, branch: parent === null ? "" : prefix + (lastKid ? "└─ " : "├─ ") });
+    tree(a.id, parent === null ? "" : prefix + (lastKid ? "   " : "│  "), out);
+  });
+  return out;
+}
+
+function avatar(a) {
+  const el = document.createElement("span");
+  el.className = "avatar"; el.style.background = a.color; el.textContent = a.name.trim()[0] || "?";
+  return el;
+}
+
+function renderAccounts() {
+  const a = active();
+  $("acctAvatar").style.background = a.color; $("acctAvatar").textContent = a.name.trim()[0] || "?";
+  $("acctName").textContent = a.name;
+  $("acctCount").textContent = accounts.length;
+  const list = $("acctTree"), parentSel = $("acctParent");
+  list.innerHTML = ""; parentSel.innerHTML = "";
+  parentSel.add(new Option("Aucune (compte principal)", ""));
+  tree().forEach(({ a, branch }) => {
+    const li = document.createElement("li"), b = document.createElement("button");
+    b.type = "button"; b.className = "pick"; b.setAttribute("aria-current", String(a.id === activeId));
+    const br = document.createElement("span"); br.className = "branch"; br.textContent = branch;
+    const n = document.createElement("span"); n.className = "name"; n.textContent = a.name;
+    const m = document.createElement("span"); m.className = "meta";
+    const scans = (readJSON(histKey(a.id)) || []).length;
+    m.textContent = a.id === activeId ? "Actif" : scans + " scan" + (scans > 1 ? "s" : "");
+    b.append(br, avatar(a), n, m);
+    b.addEventListener("click", () => { switchTo(a.id); $("acctDialog").close(); });
+    li.append(b);
+    if (accounts.length > 1) {
+      const x = document.createElement("button");
+      x.type = "button"; x.className = "link"; x.textContent = "Déconnecter";
+      x.setAttribute("aria-label", "Déconnecter " + a.name);
+      x.addEventListener("click", () => removeAccount(a.id));
+      li.append(x);
+    }
+    list.append(li);
+    parentSel.add(new Option(branch + a.name, a.id, false, a.id === activeId));
+  });
+}
+
+function switchTo(id) {
+  activeId = id; saveAccounts();
+  loadHistory(); last = "";
+  renderHistory(); renderAccounts();
+  if (history[0]) showResult(history[0].text); else clearResult();
+}
+
+function addAccount(name, parent) {
+  const id = crypto.randomUUID?.() || String(Date.now());
+  accounts.push({ id, name, parent: parent || null, color: COLORS[accounts.length % COLORS.length] });
+  switchTo(id);
+  toast("« " + name + " » connecté");
+}
+
+// Les sous-comptes remontent d'un niveau : la branche reste en place
+function removeAccount(id) {
+  const a = accounts.find(x => x.id === id);
+  if (!a || !confirm("Déconnecter « " + a.name + " » ? Son historique sur cet appareil sera supprimé.")) return;
+  accounts.forEach(x => { if (x.parent === id) x.parent = a.parent; });
+  accounts = accounts.filter(x => x.id !== id);
+  try { localStorage.removeItem(histKey(id)); } catch {}
+  if (activeId === id) activeId = a.parent || accounts[0].id;
+  switchTo(activeId);
+  toast("« " + a.name + " » déconnecté");
+}
+
+loadAccounts();
+loadHistory();
 
 function kindOf(t) {
   if (/^https?:\/\//i.test(t)) return "Lien";
@@ -273,6 +423,11 @@ function showResult(text) {
   if (kind === "Lien") open.href = text; else open.removeAttribute("href");
 }
 
+function clearResult() {
+  $("empty").hidden = false;
+  $("value").hidden = true; $("kind").hidden = true; $("actions").hidden = true;
+}
+
 function renderHistory() {
   const list = $("history");
   list.innerHTML = "";
@@ -291,7 +446,7 @@ function renderHistory() {
   $("count").textContent = history.length ? "· " + history.length : "";
 }
 
-function save() { try { localStorage.setItem(KEY, JSON.stringify(history.slice(0, 100))); } catch {} }
+function save() { writeJSON(histKey(activeId), history.slice(0, 100)); }
 
 function found(text) {
   const now = Date.now();
@@ -510,6 +665,23 @@ $("copy").addEventListener("click", () => {
 $("clear").addEventListener("click", () => { history = []; save(); renderHistory(); toast("Historique effacé"); });
 document.addEventListener("visibilitychange", () => { if (document.hidden && stream) stop(); });
 
+$("acctBtn").addEventListener("click", () => { renderAccounts(); $("acctDialog").showModal(); });
+$("acctClose").addEventListener("click", () => $("acctDialog").close());
+$("acctDialog").addEventListener("click", e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+$("acctForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const name = $("acctNew").value.trim(); if (!name) return;
+  addAccount(name, $("acctParent").value);
+  $("acctNew").value = "";
+  $("acctDialog").close();
+});
+// Un autre onglet a ajouté, retiré ou changé de compte : on se met à jour
+addEventListener("storage", e => {
+  if (e.key === ACCTS) { loadAccounts(); switchTo(activeId); }
+  else if (e.key === histKey(activeId)) { loadHistory(); renderHistory(); }
+});
+
+renderAccounts();
 renderHistory();
 if (history[0]) showResult(history[0].text);
 </script>

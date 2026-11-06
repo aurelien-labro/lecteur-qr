@@ -131,18 +131,25 @@ a.btn { text-decoration: none; color: inherit; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .foot { text-align: center; color: var(--muted); font-size: .8rem; }
 
-/* Comptes : plusieurs comptes connectés en même temps, rangés en branches (parent > enfants) */
-.top-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.acct { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 220px; background: var(--surface); border: 1px solid var(--line);
-  padding: 4px 12px 4px 4px; border-radius: 999px; cursor: pointer; font-weight: 700; font-size: .85rem; }
-.acct span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Comptes : tous les comptes connectés sont actifs en même temps, rangés en branches (parent > enfants) */
+.accounts { padding: 14px 16px; }
+.acct-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.acct-list li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px; border-radius: 12px;
+  background: var(--surface-2); border: 1px solid var(--line); }
+.acct-list .who { flex: 1; min-width: 0; display: grid; }
+.acct-list .name, .acct-list .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-list .name { font-weight: 700; font-size: .9rem; }
+.acct-list .sub { font-size: .74rem; color: var(--muted); }
 .avatar { position: relative; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; flex: none;
   color: #fff; font-weight: 800; font-size: .8rem; text-transform: uppercase; }
 /* Pastille d'état : verte si connecté, grise sinon */
 .avatar::after { content: ""; position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border-radius: 50%;
   background: var(--muted); border: 2px solid var(--surface); }
 .avatar[data-on="true"]::after { background: var(--accent); }
-@media (max-width: 520px) { .status #statusText { display: none; } .status { padding: 8px; } }
+.avatar.mini { width: 18px; height: 18px; font-size: .6rem; }
+.avatar.mini::after { display: none; }
+.history .tags { display: inline-flex; align-items: center; gap: 4px; }
+.history .tags .avatar.mini:not(:first-child) { margin-left: -8px; box-shadow: 0 0 0 2px var(--surface); }
 
 dialog.sheet { border: 1px solid var(--line); border-radius: var(--radius); padding: 0; width: min(440px, calc(100vw - 32px));
   background: var(--surface); color: var(--fg); box-shadow: 0 20px 60px rgba(0,0,0,.3); }
@@ -155,7 +162,8 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
 .tree .pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; background: none; border: 0; text-align: left;
   padding: 8px; border-radius: 10px; cursor: pointer; }
 .tree .pick:hover { background: var(--surface-2); }
-.tree .pick[aria-current="true"] { background: var(--accent-soft); }
+.tree .pick.static { cursor: default; }
+.tree .pick.static:hover { background: none; }
 .tree .branch { color: var(--muted); font-family: var(--mono); white-space: pre; flex: none; }
 .tree .who { flex: 1; min-width: 0; display: grid; }
 .tree .name, .tree .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -184,18 +192,13 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
       </span>
       Lecteur QR
     </div>
-    <div class="top-right">
-      <span class="status" id="status"><span class="dot"></span><span id="statusText">En pause</span></span>
-      <button class="acct" id="acctBtn" type="button" aria-haspopup="dialog" title="Changer de compte">
-        <span class="avatar" id="acctAvatar"></span><span id="acctName"></span>
-      </button>
-    </div>
+    <span class="status" id="status"><span class="dot"></span><span id="statusText">En pause</span></span>
   </header>
 
   <dialog class="sheet" id="acctDialog" aria-labelledby="acctTitle">
     <div class="sheet-body">
       <div class="panel-head">
-        <h2 id="acctTitle">Comptes <span class="chip" id="acctCount"></span></h2>
+        <h2 id="acctTitle">Gérer les comptes <span class="chip" id="acctTotal"></span></h2>
         <button class="link" id="acctClose" type="button">Fermer</button>
       </div>
       <ul class="tree" id="acctTree"></ul>
@@ -203,7 +206,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         <span class="eyebrow">Connecter un autre compte</span>
         <label>Nom <input id="acctNew" required maxlength="40" placeholder="Ex. Agence Lyon, Marie…" autocomplete="off"></label>
         <label>Branche <select id="acctParent"></select></label>
-        <button class="btn primary" type="submit">Ajouter et basculer</button>
+        <button class="btn primary" type="submit">Connecter</button>
       </form>
     </div>
   </dialog>
@@ -248,6 +251,14 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         </label>
         <input id="file" type="file" accept="image/*" hidden>
       </div>
+
+      <section class="panel accounts" aria-label="Comptes connectés">
+        <div class="panel-head">
+          <span class="eyebrow">Comptes connectés <span id="acctCount"></span></span>
+          <button class="link" id="acctManage" type="button" aria-haspopup="dialog">Gérer</button>
+        </div>
+        <ul class="acct-list" id="acctList"></ul>
+      </section>
     </section>
 
     <aside class="side">
@@ -294,9 +305,9 @@ const KEY = "lecteur-qr-historique";   // historique d'avant les comptes : repri
 const ACCTS = "lecteur-qr-comptes";
 const COLORS = ["#0b7a5a", "#2f6fde", "#b0451a", "#8a3fd1", "#c2185b", "#00838f", "#7a6a00"];
 let stream = null, last = "", lastAt = 0, torchOn = false;
-let history = [], accounts = [], activeId = null;
+let history = [], accounts = [];
 
-// Comptes : tous restent connectés (enregistrés sur l'appareil), un seul est actif à la fois.
+// Comptes : tous les comptes connectés sont actifs en même temps, chaque scan est enregistré sur chacun d'eux.
 // Chaque compte peut avoir un compte parent, ce qui forme des branches (ex. Entreprise > Agence > Employé).
 const histKey = id => KEY + ":" + id;
 const readJSON = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
@@ -305,7 +316,6 @@ const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); 
 function loadAccounts() {
   const s = readJSON(ACCTS) || {};
   accounts = Array.isArray(s.accounts) ? s.accounts : [];
-  activeId = s.activeId;
   if (!accounts.length) {
     const id = crypto.randomUUID?.() || String(Date.now());
     accounts = [{ id, name: "Principal", parent: null, color: COLORS[0] }];
@@ -313,25 +323,38 @@ function loadAccounts() {
     try { localStorage.removeItem(KEY); } catch {}
   }
   accounts.forEach(a => { a.connected ??= true; a.since ??= Date.now(); });  // comptes créés avant l'état de connexion
-  if (!accounts.some(a => a.id === activeId && a.connected)) activeId = fallback();
+  keepOneConnected();
   saveAccounts();
 }
-// Compte connecté vers lequel basculer ; si plus aucun ne l'est, on reconnecte le premier
-function fallback(preferred) {
-  const pick = accounts.find(a => a.id === preferred && a.connected) || accounts.find(a => a.connected) || accounts[0];
-  if (!pick.connected) { pick.connected = true; pick.since = Date.now(); }
-  return pick.id;
+// Il faut au moins un compte connecté pour recevoir les scans
+function keepOneConnected() {
+  if (accounts.length && !accounts.some(a => a.connected)) Object.assign(accounts[0], { connected: true, since: Date.now() });
 }
-const connectedCount = () => accounts.filter(a => a.connected).length;
+const connected = () => accounts.filter(a => a.connected);
+const connectedCount = () => connected().length;
 function sinceText(t) {
   const d = new Date(t);
   return d.toDateString() === new Date().toDateString()
     ? d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
     : d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
 }
-function saveAccounts() { writeJSON(ACCTS, { accounts, activeId }); }
-function loadHistory() { history = readJSON(histKey(activeId)) || []; }
-const active = () => accounts.find(a => a.id === activeId);
+function saveAccounts() { writeJSON(ACCTS, { accounts }); }
+
+// Historique affiché : les scans de tous les comptes connectés, fusionnés (un scan partagé n'apparaît qu'une fois)
+function loadHistory() {
+  const byScan = new Map();
+  connected().forEach(a => (readJSON(histKey(a.id)) || []).forEach(h => {
+    const k = h.at + "|" + h.text;
+    if (!byScan.has(k)) byScan.set(k, { text: h.text, at: h.at, ids: [] });
+    byScan.get(k).ids.push(a.id);
+  }));
+  history = [...byScan.values()].sort((x, y) => y.at - x.at).slice(0, 100);
+}
+const pathOf = a => {
+  const names = [];
+  for (let p = accounts.find(x => x.id === a.parent); p; p = accounts.find(x => x.id === p.parent)) names.unshift(p.name);
+  return names.join(" › ");
+};
 
 // Liste à plat dans l'ordre de l'arbre, avec le dessin des branches (├─ └─ │)
 function tree(parent = null, prefix = "", out = []) {
@@ -351,30 +374,42 @@ function avatar(a) {
   return el;
 }
 
+const scansText = a => { const n = (readJSON(histKey(a.id)) || []).length; return n + " scan" + (n > 1 ? "s" : ""); };
+
 function renderAccounts() {
-  const a = active();
-  $("acctAvatar").style.background = a.color; $("acctAvatar").textContent = a.name.trim()[0] || "?";
-  $("acctAvatar").dataset.on = "true";
-  $("acctName").textContent = a.name;
-  $("acctCount").textContent = connectedCount() + "/" + accounts.length + " connecté" + (connectedCount() > 1 ? "s" : "");
-  const list = $("acctTree"), parentSel = $("acctParent");
+  const items = tree();
+  // Sous la caméra : tous les comptes connectés, sans sélection
+  const strip = $("acctList");
+  strip.innerHTML = "";
+  items.filter(({ a }) => a.connected).forEach(({ a }) => {
+    const li = document.createElement("li");
+    const who = document.createElement("span"); who.className = "who";
+    const n = document.createElement("span"); n.className = "name"; n.textContent = a.name;
+    const s = document.createElement("span"); s.className = "sub";
+    s.textContent = (pathOf(a) ? pathOf(a) + " · " : "") + scansText(a);
+    who.append(n, s);
+    li.title = a.name + " — connecté depuis " + sinceText(a.since);
+    li.append(avatar(a), who);
+    strip.append(li);
+  });
+  $("acctCount").textContent = "· " + connectedCount();
+  $("acctTotal").textContent = connectedCount() + "/" + accounts.length + " connecté" + (connectedCount() > 1 ? "s" : "");
+
+  // Fenêtre de gestion : l'arbre complet, comptes déconnectés compris
+  const list = $("acctTree"), parentSel = $("acctParent"), keepParent = parentSel.value;
   list.innerHTML = ""; parentSel.innerHTML = "";
   parentSel.add(new Option("Aucune (compte principal)", ""));
-  tree().forEach(({ a, branch }) => {
-    const li = document.createElement("li"), b = document.createElement("button");
+  items.forEach(({ a, branch }) => {
+    const li = document.createElement("li"), b = document.createElement("div");
     li.classList.toggle("off", !a.connected);
-    b.type = "button"; b.className = "pick"; b.setAttribute("aria-current", String(a.id === activeId));
+    b.className = "pick static";
     const br = document.createElement("span"); br.className = "branch"; br.textContent = branch;
     const who = document.createElement("span"); who.className = "who";
     const n = document.createElement("span"); n.className = "name"; n.textContent = a.name;
     const s = document.createElement("span"); s.className = "sub" + (a.connected ? " on" : "");
-    const scans = (readJSON(histKey(a.id)) || []).length;
-    s.textContent = (!a.connected ? "Déconnecté" : a.id === activeId ? "Connecté · actif" : "Connecté depuis " + sinceText(a.since))
-      + " · " + scans + " scan" + (scans > 1 ? "s" : "");
+    s.textContent = (a.connected ? "Connecté depuis " + sinceText(a.since) : "Déconnecté") + " · " + scansText(a);
     who.append(n, s);
     b.append(br, avatar(a), who);
-    b.title = a.connected ? "Basculer sur ce compte" : "Reconnecter et basculer sur ce compte";
-    b.addEventListener("click", () => { if (!a.connected) setConnected(a.id, true); switchTo(a.id); $("acctDialog").close(); });
     const t = document.createElement("button");
     const label = a.connected ? "Déconnecter" : "Reconnecter";
     t.type = "button"; t.className = "link toggle"; t.title = label; t.setAttribute("aria-label", label + " " + a.name);
@@ -391,32 +426,30 @@ function renderAccounts() {
       li.append(x);
     }
     list.append(li);
-    parentSel.add(new Option(branch + a.name, a.id, false, a.id === activeId));
+    parentSel.add(new Option(branch + a.name, a.id, false, a.id === keepParent));
   });
 }
 
-function switchTo(id) {
-  activeId = id; saveAccounts();
-  loadHistory(); last = "";
+function refresh() {
+  saveAccounts();
+  loadHistory();
   renderHistory(); renderAccounts();
-  if (history[0]) showResult(history[0].text); else clearResult();
 }
 
 function addAccount(name, parent) {
   const id = crypto.randomUUID?.() || String(Date.now());
   accounts.push({ id, name, parent: parent || null, color: COLORS[accounts.length % COLORS.length], connected: true, since: Date.now() });
-  switchTo(id);
+  refresh();
   toast("« " + name + " » connecté");
 }
 
-// Déconnecter garde le compte et son historique ; il réapparaît en gris dans la liste
+// Déconnecter garde le compte et son historique ; il réapparaît en gris dans la gestion
 function setConnected(id, on) {
   const a = accounts.find(x => x.id === id);
   if (!a || a.connected === on || (!on && connectedCount() === 1)) return;
   a.connected = on;
   if (on) a.since = Date.now();
-  else if (activeId === id) activeId = fallback(a.parent);
-  switchTo(activeId);
+  refresh();
   toast("« " + a.name + " » " + (on ? "connecté" : "déconnecté"));
 }
 
@@ -427,8 +460,8 @@ function removeAccount(id) {
   accounts.forEach(x => { if (x.parent === id) x.parent = a.parent; });
   accounts = accounts.filter(x => x.id !== id);
   try { localStorage.removeItem(histKey(id)); } catch {}
-  if (activeId === id || connectedCount() === 0) activeId = fallback(activeId === id ? a.parent : activeId);
-  switchTo(activeId);
+  keepOneConnected();
+  refresh();
   toast("« " + a.name + " » supprimé");
 }
 
@@ -489,7 +522,12 @@ function renderHistory() {
     const li = document.createElement("li"), b = document.createElement("button");
     b.type = "button";
     const t = document.createElement("time"); t.textContent = new Date(h.at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-    const k = document.createElement("span"); k.className = "kind"; k.textContent = kindOf(h.text);
+    const k = document.createElement("span"); k.className = "kind tags"; k.textContent = kindOf(h.text);
+    // Comptes qui ont reçu ce scan
+    h.ids.forEach(id => {
+      const a = accounts.find(x => x.id === id); if (!a) return;
+      const m = avatar(a); m.classList.add("mini"); m.title = a.name; k.append(m);
+    });
     const x = document.createElement("span"); x.className = "txt"; x.textContent = h.text;
     b.append(t, k, x);
     b.addEventListener("click", () => showResult(h.text));
@@ -500,7 +538,11 @@ function renderHistory() {
   $("count").textContent = history.length ? "· " + history.length : "";
 }
 
-function save() { writeJSON(histKey(activeId), history.slice(0, 100)); }
+// Le scan est ajouté à l'historique de chaque compte connecté
+function record(text, at) {
+  connected().forEach(a => writeJSON(histKey(a.id), [{ text, at }, ...(readJSON(histKey(a.id)) || [])].slice(0, 100)));
+  loadHistory(); renderHistory(); renderAccounts();
+}
 
 function found(text) {
   const now = Date.now();
@@ -510,9 +552,8 @@ function found(text) {
   last = text; lastAt = now;
   navigator.vibrate?.(50);
   showResult(text);
-  history.unshift({ text, at: now });
-  history = history.slice(0, 100);
-  save(); renderHistory();
+  record(text, now);
+  if (connectedCount() > 1) toast("Enregistré sur " + connectedCount() + " comptes");
 }
 
 async function listCams() {
@@ -716,10 +757,14 @@ $("copy").addEventListener("click", () => {
     toast("Texte sélectionné, copie-le manuellement");
   });
 });
-$("clear").addEventListener("click", () => { history = []; save(); renderHistory(); toast("Historique effacé"); });
+$("clear").addEventListener("click", () => {
+  if (!confirm("Effacer l'historique des " + connectedCount() + " compte(s) connecté(s) ?")) return;
+  connected().forEach(a => writeJSON(histKey(a.id), []));
+  loadHistory(); renderHistory(); renderAccounts(); toast("Historique effacé");
+});
 document.addEventListener("visibilitychange", () => { if (document.hidden && stream) stop(); });
 
-$("acctBtn").addEventListener("click", () => { renderAccounts(); $("acctDialog").showModal(); });
+$("acctManage").addEventListener("click", () => { renderAccounts(); $("acctDialog").showModal(); });
 $("acctClose").addEventListener("click", () => $("acctDialog").close());
 $("acctDialog").addEventListener("click", e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 $("acctForm").addEventListener("submit", e => {
@@ -729,10 +774,11 @@ $("acctForm").addEventListener("submit", e => {
   $("acctNew").value = "";
   $("acctDialog").close();
 });
-// Un autre onglet a ajouté, retiré ou changé de compte : on se met à jour
+// Un autre onglet a modifié les comptes ou un historique : on se met à jour
 addEventListener("storage", e => {
-  if (e.key === ACCTS) { loadAccounts(); switchTo(activeId); }
-  else if (e.key === histKey(activeId)) { loadHistory(); renderHistory(); }
+  if (e.key !== ACCTS && !e.key?.startsWith(KEY + ":")) return;
+  if (e.key === ACCTS) loadAccounts();
+  loadHistory(); renderHistory(); renderAccounts();
 });
 
 renderAccounts();

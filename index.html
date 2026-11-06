@@ -71,9 +71,12 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cov
 .hint { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.55); color: #fff;
   font-size: .78rem; font-weight: 600; padding: 5px 12px; border-radius: 999px; pointer-events: none; white-space: nowrap; }
 .stage:not(.live) .hint { display: none; }
-.zoom { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(70%, 280px); display: flex; align-items: center; gap: 10px;
+.sliders { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(82%, 320px); display: grid; gap: 8px; }
+.stage:not(.live) .sliders { display: none; }
+.zoom { display: flex; align-items: center; gap: 10px;
   background: rgba(0,0,0,.55); padding: 8px 14px; border-radius: 999px; color: #fff; font-size: .8rem; font-weight: 700; }
-.zoom input { flex: 1; accent-color: #3cc597; min-width: 0; }
+.auto { background: rgba(255,255,255,.15); border: 0; color: #fff; font-size: .72rem; font-weight: 800; padding: 4px 10px; border-radius: 999px; cursor: pointer; }
+.auto[aria-pressed="true"] { background: #3cc597; color: #04130d; }.zoom input { flex: 1; accent-color: #3cc597; min-width: 0; }
 .zoom output { font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: right; }
 
 .cover { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: #e7ede9;
@@ -148,9 +151,15 @@ a.btn { text-decoration: none; color: inherit; }
         <div class="finder" id="finder" aria-hidden="true"><i></i><i></i><i></i><i></i><span class="laser"></span></div>
         <span class="hint" id="hint">Touche l'image pour faire la netteté</span>
         <span class="ring" id="ring" aria-hidden="true"></span>
-        <label class="zoom" id="zoomBox" hidden>
-          Zoom <input type="range" id="zoom" min="1" max="1" step="0.1" value="1"> <output id="zoomVal">1,0×</output>
-        </label>
+        <div class="sliders">
+          <label class="zoom" id="focusBox" hidden>
+            Netteté <input type="range" id="focus" min="0" max="1" step="0.01" value="0">
+            <button type="button" class="auto" id="focusAuto" aria-pressed="true">Auto</button>
+          </label>
+          <label class="zoom" id="zoomBox" hidden>
+            Zoom <input type="range" id="zoom" min="1" max="1" step="0.1" value="1"> <output id="zoomVal">1,0×</output>
+          </label>
+        </div>
         <div class="cover" id="cover">
           <div class="cover-inner">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/></svg>
@@ -341,6 +350,7 @@ async function start(deviceId, auto = !deviceId) {
   torchOn = false; $("torch").setAttribute("aria-pressed", "false");
   if (caps.focusMode?.includes("continuous")) track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
   setupZoom(track);
+  setupFocus(track);
   listCams();
   requestAnimationFrame(tick);
 }
@@ -364,6 +374,32 @@ $("zoom").addEventListener("input", e => {
 });
 $("zoomBox").addEventListener("pointerdown", e => e.stopPropagation());
 
+// Netteté manuelle (distance de mise au point), proposée seulement si la caméra l'accepte
+function setupFocus(track) {
+  const fd = caps.focusDistance, box = $("focusBox"), input = $("focus");
+  box.hidden = !fd || !caps.focusMode?.includes("manual") || fd.max <= fd.min;
+  if (box.hidden) return;
+  input.min = fd.min; input.max = fd.max; input.step = fd.step || (fd.max - fd.min) / 100;
+  input.value = track.getSettings().focusDistance ?? fd.min;
+  setFocusAuto(true);
+}
+
+function setFocusAuto(on) {
+  $("focusAuto").setAttribute("aria-pressed", String(on));
+  const track = stream?.getVideoTracks()[0];
+  if (on && track && caps.focusMode?.includes("continuous"))
+    track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
+}
+
+$("focus").addEventListener("input", e => {
+  const track = stream?.getVideoTracks()[0]; if (!track) return;
+  $("focusAuto").setAttribute("aria-pressed", "false");
+  clearTimeout(refocusTimer);
+  track.applyConstraints({ advanced: [{ focusMode: "manual", focusDistance: Number(e.target.value) }] }).catch(() => {});
+});
+$("focusAuto").addEventListener("click", e => { e.preventDefault(); setFocusAuto(true); });
+$("focusBox").addEventListener("pointerdown", e => e.stopPropagation());
+
 // Toucher l'image : mise au point sur ce point (si l'appareil le permet), sinon relance de l'autofocus
 $("stage").addEventListener("pointerdown", async e => {
   const track = stream?.getVideoTracks()[0]; if (!track) return;
@@ -374,6 +410,7 @@ $("stage").addEventListener("pointerdown", async e => {
   ring.classList.remove("show"); void ring.offsetWidth; ring.classList.add("show");
   $("hint").hidden = true;
   const modes = caps.focusMode || [];
+  $("focusAuto").setAttribute("aria-pressed", "true");
   const c = {};
   if (caps.pointsOfInterest) c.pointsOfInterest = [{ x: x / r.width, y: y / r.height }];
   if (modes.includes("single-shot")) c.focusMode = "single-shot";
@@ -391,18 +428,32 @@ function stop() {
   video.srcObject = null;
   $("torch").hidden = true;
   $("zoomBox").hidden = true;
+  $("focusBox").hidden = true;
   clearTimeout(refocusTimer);
   setStatus(false);
   cover("Prêt à scanner", "Active la caméra et place un QR code dans le cadre.");
 }
 
-// Alterne entre le centre de l'image en pleine résolution (petits QR, plus nets)
-// et l'image entière réduite (QR proches ou décentrés)
+// Décodeur natif du système (Chrome Android, Edge…) : bien plus tolérant au flou que jsQR.
+// Sinon, jsQR alterne entre le centre en pleine résolution (petits QR) et l'image entière.
+let detector = null;
+(async () => {
+  try {
+    if ("BarcodeDetector" in window && (await BarcodeDetector.getSupportedFormats()).includes("qr_code"))
+      detector = new BarcodeDetector({ formats: ["qr_code"] });
+  } catch {}
+})();
+
 let frame = 0;
-function tick() {
+async function tick() {
   if (!stream) return;
   const vw = video.videoWidth, vh = video.videoHeight;
-  if (video.readyState >= 2 && vw) {
+  if (detector && video.readyState >= 2 && vw) {
+    try {
+      const codes = await detector.detect(video);
+      if (codes[0]?.rawValue) found(codes[0].rawValue);
+    } catch { detector = null; }
+  } else if (video.readyState >= 2 && vw) {
     let sx = 0, sy = 0, sw = vw, sh = vh;
     if (frame++ % 2 === 0) {
       const side = Math.round(Math.min(vw, vh) * 0.7);
@@ -416,7 +467,7 @@ function tick() {
     const code = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
     if (code && code.data) found(code.data);
   }
-  setTimeout(() => requestAnimationFrame(tick), 90);
+  setTimeout(() => requestAnimationFrame(tick), detector ? 60 : 90);
 }
 
 function decodeFile(file) {

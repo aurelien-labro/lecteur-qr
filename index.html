@@ -145,6 +145,11 @@ a.btn { text-decoration: none; color: inherit; }
 .acct-list .who { min-width: 0; display: grid; }
 .acct-list .last { color: var(--fg); }
 .acts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.acct-list li.go { cursor: pointer; }
+.acct-list li.go:hover { border-color: var(--accent); }
+.panel-note { margin: 0; font-size: .78rem; color: var(--muted); }
+.codeline { margin: 0; font-size: .85rem; color: var(--muted); }
+.codeline b { font-family: var(--mono); font-size: 1rem; color: var(--accent); }
 .acct-list .name, .acct-list .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acct-list .name { font-weight: 700; font-size: .9rem; }
 .acct-list .sub { font-size: .74rem; color: var(--muted); }
@@ -238,6 +243,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         <span class="eyebrow" id="swsTitle"></span>
         <label>Lien SoWeSign <input id="swsUrl" type="text" inputmode="url" placeholder="Vide = pas de SoWeSign pour ce compte" autocomplete="off"></label>
         <label>Reconnaître ses QR <input id="swsMatch" maxlength="200" placeholder="Mot-clé présent dans les QR de cet organisme" autocomplete="off"></label>
+        <label>Motif du code (avancé) <input id="swsExtract" maxlength="200" placeholder="Vide = automatique. Ex. code=(\d{6})" autocomplete="off"></label>
         <label id="swsAndroid">Ouvrir avec <select id="swsBrowser"></select></label>
         <div id="swsDesk" class="stack" hidden>
           <label>Navigateur de ce compte <select id="swsDeskB"></select></label>
@@ -299,6 +305,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
           <button class="link" id="acctManage" type="button" aria-haspopup="dialog">Gérer</button>
         </div>
         <ul class="acct-list" id="acctList"></ul>
+        <p class="panel-note">Touche une fiche pour ouvrir la session SoWeSign de ce compte.</p>
       </section>
     </section>
 
@@ -310,6 +317,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         </div>
         <p class="empty" id="empty">Aucun QR code lu pour l'instant. Le contenu apparaîtra ici dès la détection.</p>
         <pre class="value" id="value" hidden></pre>
+        <p class="codeline" id="codeLine" hidden></p>
         <div class="route" id="route" hidden>
           <span class="route-title" id="routeTitle"></span>
           <div class="route-btns" id="routeBtns"></div>
@@ -462,6 +470,35 @@ function launch(url, a) {
 // Un simple code (pas un lien) est transmis à l'extension du navigateur : dans l'adresse (#lqr=), ou ?lqr= pour un
 // lien Android, qui ne peut pas porter de #. L'extension le remplit dans le champ choisi, sans jamais valider.
 const isCode = s => /^[\w.-]{1,64}$/.test(s);
+
+// La version web de SoWeSign ne demande qu'un code à saisir : le scan du QR n'existe que dans leur application mobile.
+// On tire donc du QR le code à saisir : motif réglé sur le compte, sinon code simple, sinon paramètre d'un lien ou
+// d'un JSON (code, session, token…), sinon fin du chemin d'un lien (qui contient un chiffre).
+const CODE_KEYS = ["code", "codeseance", "code_seance", "sessioncode", "session", "token", "otp", "key", "c", "s", "t", "id"];
+function extractCode(scan, a) {
+  scan = scan.trim();
+  if (a?.extract) {
+    try { const m = new RegExp(a.extract).exec(scan); const c = m && (m[1] ?? m[0]); if (c && isCode(c)) return c; } catch {}
+  }
+  if (isCode(scan)) return scan;
+  const fromMap = map => {
+    const lower = Object.fromEntries(Object.entries(map).map(([k, v]) => [k.toLowerCase(), v]));
+    for (const k of CODE_KEYS) if (lower[k] != null && isCode(String(lower[k]))) return String(lower[k]);
+    return null;
+  };
+  try {
+    const j = JSON.parse(scan);
+    if (j && typeof j === "object" && !Array.isArray(j)) { const c = fromMap(j); if (c) return c; }
+  } catch {}
+  try {
+    const u = new URL(scan);
+    const c = fromMap(Object.fromEntries([...u.searchParams, ...new URLSearchParams(u.hash.replace(/^#\??/, ""))]));
+    if (c) return c;
+    const seg = u.pathname.split("/").filter(Boolean).pop();
+    if (seg && seg.length >= 4 && /\d/.test(seg) && isCode(seg)) return seg;
+  } catch {}
+  return null;
+}
 function withCode(url, code, viaIntent) {
   const u = new URL(url);
   if (viaIntent) u.searchParams.set("lqr", code); else u.hash = "lqr=" + encodeURIComponent(code);
@@ -480,6 +517,7 @@ function editSws(a) {
   $("swsTitle").textContent = "SoWeSign de « " + a.name + " »";
   $("swsUrl").value = a.sws || "";
   $("swsMatch").value = a.match || "";
+  $("swsExtract").value = a.extract || "";
   const sel = $("swsBrowser");
   sel.innerHTML = "";
   BROWSERS.forEach(([p, n]) => sel.add(new Option(n, p, false, p === (a.browser || ""))));
@@ -504,13 +542,15 @@ function openSws(a, scan = currentScan()) {
   // Un QR SoWeSign (lien vers le même site que le compte) est ouvert tel quel ; sinon on ouvre le lien du compte
   let target = a.sws.replaceAll("{scan}", encodeURIComponent(scan));
   try { if (new URL(scan).origin === new URL(target).origin) target = scan; } catch {}
-  if (isCode(scan) && !a.sws.includes("{scan}")) target = withCode(target, scan, usesIntent(a));
+  const code = scan ? extractCode(scan, a) : null;
+  if (code && target !== scan && !a.sws.includes("{scan}")) target = withCode(target, code, usesIntent(a));
   launch(target, a);
-  if (scan) navigator.clipboard?.writeText(scan).catch(() => {});
+  if (scan) navigator.clipboard?.writeText(code || scan).catch(() => {});
   // Dernier envoi et dernière ouverture de la session, séparés : ouvrir la session ne fait pas perdre le code à renvoyer
   if (scan) a.sent = { text: scan.slice(0, 200), at: Date.now() }; else a.opened = Date.now();
   saveAccounts(); renderAccounts();
-  toast("SoWeSign ouvert pour « " + a.name + " »" + (where(a) ? " dans " + where(a) : ""));
+  toast("SoWeSign ouvert pour « " + a.name + " »" + (where(a) ? " dans " + where(a) : "")
+    + (scan && !code && target !== scan ? " — aucun code reconnu dans ce QR, contenu copié" : ""));
 }
 
 // Après un scan : l'organisme est reconnu → un bouton pour le bon compte ; sinon on propose de choisir
@@ -556,7 +596,12 @@ function renderAccounts() {
       : sentTxt || "Aucun envoi";
     last.title = last.textContent;
     who.append(n, s, last);
-    li.title = a.name + " — connecté depuis " + sinceText(a.since);
+    // Toucher la fiche (hors boutons) ouvre directement la session SoWeSign du compte, sans code
+    li.title = a.name + (a.sws ? " — toucher pour ouvrir la session SoWeSign" : " — connecté depuis " + sinceText(a.since));
+    li.tabIndex = 0; li.classList.add("go");
+    const go = () => a.sws ? openSws(a, "") : editSws(a);
+    li.addEventListener("click", e => { if (!e.target.closest("button")) go(); });
+    li.addEventListener("keydown", e => { if (e.key === "Enter" && e.target === li) go(); });
     // Mini-fiche : envoyer le scan affiché, renvoyer le dernier code, ou aller sur la session en un clic
     const acts = document.createElement("div"); acts.className = "acts";
     const btn = (label, cls, title, fn) => {
@@ -712,13 +757,19 @@ function showResult(text) {
   const open = $("open");
   open.hidden = kind !== "Lien";
   if (kind === "Lien") open.href = text; else open.removeAttribute("href");
+  // Le code qui sera saisi dans SoWeSign, ou la raison pour laquelle il n'y en a pas
+  const code = extractCode(text), line = $("codeLine");
+  line.hidden = !code && kind === "Lien";
+  line.replaceChildren(...(code
+    ? [isCode(text.trim()) ? "Code à saisir : " : "Code détecté : ", Object.assign(document.createElement("b"), { textContent: code })]
+    : ["Aucun code simple reconnu dans ce QR (réglage « Motif du code » dans Gérer)."]));
   renderRoute(text);
   renderAccounts();  // les boutons SoWeSign passent en « Envoyer »
 }
 
 function clearResult() {
   $("empty").hidden = false;
-  $("value").hidden = true; $("kind").hidden = true; $("actions").hidden = true; $("route").hidden = true;
+  $("value").hidden = true; $("kind").hidden = true; $("actions").hidden = true; $("route").hidden = true; $("codeLine").hidden = true;
 }
 
 function renderHistory() {
@@ -982,7 +1033,10 @@ $("swsForm").addEventListener("submit", e => {
   if (url === null) return toast("Lien SoWeSign invalide");
   const deskB = $("swsDeskB").value, deskP = $("swsDeskP").value.trim();
   if (!isAndroid && deskB && !/^[A-Za-z0-9 _-]{1,40}$/.test(deskP)) return toast("Dossier du profil invalide (lettres, chiffres, espace, - et _)");
+  const extract = $("swsExtract").value.trim();
+  if (extract) { try { new RegExp(extract); } catch { return toast("Motif du code invalide"); } }
   a.sws = url;
+  a.extract = extract || undefined;
   a.match = $("swsMatch").value.trim();
   a.browser = $("swsBrowser").value;
   if (!isAndroid) { if (deskB) a.desk = { b: deskB, p: deskP }; else delete a.desk; }

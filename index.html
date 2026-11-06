@@ -107,7 +107,7 @@ select.btn { appearance: none; padding-right: 34px; flex: 1 1 140px; min-width: 
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; display: grid; gap: 12px; min-width: 0; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .eyebrow { font-size: .72rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
-.chip { font-size: .75rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.chip { white-space: nowrap; font-size: .75rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
 .chip.warn { background: var(--warn-soft); color: var(--warn); }
 .value { font-family: var(--mono); font-size: .95rem; margin: 0; padding: 14px; border-radius: 12px; background: var(--surface-2);
   border: 1px solid var(--line); word-break: break-all; white-space: pre-wrap; max-height: 220px; overflow: auto; }
@@ -133,13 +133,18 @@ a.btn { text-decoration: none; color: inherit; }
 
 /* Comptes : tous les comptes connectés sont actifs en même temps, rangés en branches (parent > enfants) */
 .accounts { padding: 14px 16px; }
-.acct-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.acct-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); }
 .acct-list li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px; border-radius: 12px;
   background: var(--surface-2); border: 1px solid var(--line); }
 .acct-list .who { flex: 1; min-width: 0; display: grid; }
 .acct-list .name, .acct-list .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acct-list .name { font-weight: 700; font-size: .9rem; }
 .acct-list .sub { font-size: .74rem; color: var(--muted); }
+/* Bouton Sowesoft de chaque compte : lier, se connecter, ou envoyer le scan affiché */
+.sws { flex: none; font-size: .72rem; font-weight: 800; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px dashed var(--line); background: var(--surface); color: var(--muted); }
+.sws.linked { border-style: solid; border-color: var(--accent); color: var(--accent); }
+.sws.send { background: var(--accent); color: var(--accent-fg); }
 .avatar { position: relative; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; flex: none;
   color: #fff; font-weight: 800; font-size: .8rem; text-transform: uppercase; }
 /* Pastille d'état : verte si connecté, grise sinon */
@@ -206,6 +211,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         <span class="eyebrow">Connecter un autre compte</span>
         <label>Nom <input id="acctNew" required maxlength="40" placeholder="Ex. Agence Lyon, Marie…" autocomplete="off"></label>
         <label>Branche <select id="acctParent"></select></label>
+        <label>Lien Sowesoft (optionnel) <input id="acctSws" type="text" inputmode="url" placeholder="https://…  ({scan} = contenu scanné)" autocomplete="off"></label>
         <button class="btn primary" type="submit">Connecter</button>
       </form>
     </div>
@@ -292,7 +298,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
     </aside>
   </main>
 
-  <p class="foot">Tout est traité sur cet appareil. Aucune image ni donnée n'est envoyée.</p>
+  <p class="foot">Tout est traité sur cet appareil. Rien ne part vers Sowesoft sans un clic sur « Envoyer ».</p>
 </div>
 <div class="toast" id="toast" role="status"></div>
 
@@ -374,6 +380,30 @@ function avatar(a) {
   return el;
 }
 
+// Sowesoft : chaque compte peut avoir son lien de connexion. Sans API, « envoyer » copie le scan
+// et ouvre ce lien ; {scan} dans le lien est remplacé par le contenu scanné.
+function cleanUrl(v) {
+  v = v.trim(); if (!v) return "";
+  if (!/^[a-z]+:/i.test(v)) v = "https://" + v;
+  try { const u = new URL(v.replace("{scan}", "")); return /^https?:$/.test(u.protocol) ? v : null; } catch { return null; }
+}
+function editSws(a) {
+  const v = prompt("Lien Sowesoft pour « " + a.name + " » (vide pour retirer).\n{scan} dans le lien sera remplacé par le contenu scanné.", a.sws || "");
+  if (v === null) return;
+  const url = cleanUrl(v);
+  if (url === null) return toast("Lien invalide");
+  if (url) a.sws = url; else delete a.sws;
+  refresh();
+  toast(url ? "Sowesoft lié à « " + a.name + " »" : "Sowesoft retiré de « " + a.name + " »");
+}
+const currentScan = () => $("value").hidden ? "" : $("value").textContent;
+function openSws(a) {
+  const scan = currentScan();
+  window.open(a.sws.replaceAll("{scan}", encodeURIComponent(scan)), "_blank", "noopener");
+  if (scan) navigator.clipboard?.writeText(scan).catch(() => {});
+  toast(scan ? "Scan copié, Sowesoft ouvert pour « " + a.name + " »" : "Sowesoft ouvert pour « " + a.name + " »");
+}
+
 const scansText = a => { const n = (readJSON(histKey(a.id)) || []).length; return n + " scan" + (n > 1 ? "s" : ""); };
 
 function renderAccounts() {
@@ -389,7 +419,19 @@ function renderAccounts() {
     s.textContent = (pathOf(a) ? pathOf(a) + " · " : "") + scansText(a);
     who.append(n, s);
     li.title = a.name + " — connecté depuis " + sinceText(a.since);
-    li.append(avatar(a), who);
+    const sw = document.createElement("button");
+    sw.type = "button";
+    if (!a.sws) {
+      sw.className = "sws"; sw.textContent = "Lier Sowesoft";
+      sw.addEventListener("click", () => editSws(a));
+    } else {
+      const send = !!currentScan();
+      sw.className = "sws linked" + (send ? " send" : "");
+      sw.textContent = send ? "Envoyer" : "Sowesoft";
+      sw.title = send ? "Copier le scan et ouvrir Sowesoft pour ce compte" : "Se connecter à Sowesoft pour ce compte";
+      sw.addEventListener("click", () => openSws(a));
+    }
+    li.append(avatar(a), who, sw);
     strip.append(li);
   });
   $("acctCount").textContent = "· " + connectedCount();
@@ -407,9 +449,16 @@ function renderAccounts() {
     const who = document.createElement("span"); who.className = "who";
     const n = document.createElement("span"); n.className = "name"; n.textContent = a.name;
     const s = document.createElement("span"); s.className = "sub" + (a.connected ? " on" : "");
-    s.textContent = (a.connected ? "Connecté depuis " + sinceText(a.since) : "Déconnecté") + " · " + scansText(a);
+    s.textContent = (a.connected ? "Connecté depuis " + sinceText(a.since) : "Déconnecté") + " · " + scansText(a)
+      + (a.sws ? " · Sowesoft lié" : "");
     who.append(n, s);
     b.append(br, avatar(a), who);
+    const l = document.createElement("button");
+    l.type = "button"; l.className = "link toggle"; l.title = a.sws ? "Modifier le lien Sowesoft" : "Lier Sowesoft";
+    l.setAttribute("aria-label", l.title + " de " + a.name);
+    l.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg><span>Sowesoft</span>';
+    if (a.sws) l.style.color = "var(--accent)";
+    l.addEventListener("click", () => editSws(a));
     const t = document.createElement("button");
     const label = a.connected ? "Déconnecter" : "Reconnecter";
     t.type = "button"; t.className = "link toggle"; t.title = label; t.setAttribute("aria-label", label + " " + a.name);
@@ -417,7 +466,7 @@ function renderAccounts() {
     t.lastChild.textContent = label;
     t.disabled = a.connected && connectedCount() === 1;  // au moins un compte reste connecté
     t.addEventListener("click", () => setConnected(a.id, !a.connected));
-    li.append(b, t);
+    li.append(b, l, t);
     if (accounts.length > 1) {
       const x = document.createElement("button");
       x.type = "button"; x.className = "x"; x.textContent = "×";
@@ -436,9 +485,10 @@ function refresh() {
   renderHistory(); renderAccounts();
 }
 
-function addAccount(name, parent) {
+function addAccount(name, parent, sws) {
   const id = crypto.randomUUID?.() || String(Date.now());
-  accounts.push({ id, name, parent: parent || null, color: COLORS[accounts.length % COLORS.length], connected: true, since: Date.now() });
+  accounts.push({ id, name, parent: parent || null, color: COLORS[accounts.length % COLORS.length], connected: true, since: Date.now(),
+    ...(sws ? { sws } : {}) });
   refresh();
   toast("« " + name + " » connecté");
 }
@@ -508,6 +558,7 @@ function showResult(text) {
   const open = $("open");
   open.hidden = kind !== "Lien";
   if (kind === "Lien") open.href = text; else open.removeAttribute("href");
+  renderAccounts();  // les boutons Sowesoft passent en « Envoyer »
 }
 
 function clearResult() {
@@ -770,8 +821,10 @@ $("acctDialog").addEventListener("click", e => { if (e.target === e.currentTarge
 $("acctForm").addEventListener("submit", e => {
   e.preventDefault();
   const name = $("acctNew").value.trim(); if (!name) return;
-  addAccount(name, $("acctParent").value);
-  $("acctNew").value = "";
+  const sws = cleanUrl($("acctSws").value);
+  if (sws === null) return toast("Lien Sowesoft invalide");
+  addAccount(name, $("acctParent").value, sws);
+  $("acctNew").value = ""; $("acctSws").value = "";
   $("acctDialog").close();
 });
 // Un autre onglet a modifié les comptes ou un historique : on se met à jour

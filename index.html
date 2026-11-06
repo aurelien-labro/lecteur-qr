@@ -194,6 +194,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
   color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; }
 .tree .x:hover { background: var(--warn-soft); color: var(--warn); }
 .link:disabled { opacity: .4; cursor: default; }
+.stack { display: grid; gap: 10px; }
 .keep { margin: 0; font-size: .8rem; color: var(--muted); padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
 .keep.ok { color: var(--accent); background: var(--accent-soft); }
 .tree .toggle { display: inline-flex; align-items: center; gap: 6px; }
@@ -235,7 +236,11 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         <span class="eyebrow" id="swsTitle"></span>
         <label>Lien SoWeSign <input id="swsUrl" type="text" inputmode="url" placeholder="Vide = pas de SoWeSign pour ce compte" autocomplete="off"></label>
         <label>Reconnaître ses QR <input id="swsMatch" maxlength="200" placeholder="Mot-clé présent dans les QR de cet organisme" autocomplete="off"></label>
-        <label>Ouvrir avec <select id="swsBrowser"></select></label>
+        <label id="swsAndroid">Ouvrir avec <select id="swsBrowser"></select></label>
+        <div id="swsDesk" class="stack" hidden>
+          <label>Navigateur de ce compte <select id="swsDeskB"></select></label>
+          <label>Dossier du profil <input id="swsDeskP" maxlength="40" placeholder="Default, Profile 1…  (profils.cmd les liste)" autocomplete="off"></label>
+        </div>
         <p class="keep" id="swsHint"></p>
         <div class="actions">
           <button class="btn" type="button" id="swsCancel">Annuler</button>
@@ -429,6 +434,17 @@ const BROWSERS = [["", "Ce navigateur"], ["com.android.chrome", "Chrome"], ["org
 const isAndroid = /Android/i.test(navigator.userAgent);
 const browserName = a => (BROWSERS.find(([p]) => p === a.browser) || BROWSERS[0])[1];
 
+// Ordinateur (Windows) : l'outil du dossier « outil-windows » ouvre SoWeSign dans le profil du compte, via un lien lqr://
+const DESK = [["", "Ce navigateur"], ["chrome", "Chrome"], ["edge", "Edge"], ["brave", "Brave"]];
+const hasDesk = a => !!(a.desk && !isAndroid);
+const deskLabel = a => (DESK.find(([v]) => v === a.desk.b) || DESK[0])[1] + " · " + a.desk.p;
+const where = a => hasDesk(a) ? deskLabel(a) : usesIntent(a) ? browserName(a) : "";
+function openProfile({ b, p }, url) {
+  const a = document.createElement("a");
+  a.href = "lqr://open?b=" + b + "&p=" + encodeURIComponent(p) + "&u=" + encodeURIComponent(url);
+  document.body.append(a); a.click(); a.remove();
+}
+
 const intentUrl = (url, pkg) => {
   const u = new URL(url);
   return "intent://" + u.host + u.pathname + u.search + "#Intent;scheme=" + u.protocol.slice(0, -1)
@@ -436,7 +452,8 @@ const intentUrl = (url, pkg) => {
 };
 const usesIntent = a => !!(a.browser && isAndroid);
 function launch(url, a) {
-  if (usesIntent(a) && !new URL(url).hash) location.href = intentUrl(url, a.browser);
+  if (hasDesk(a)) openProfile(a.desk, url);
+  else if (usesIntent(a) && !new URL(url).hash) location.href = intentUrl(url, a.browser);
   else window.open(url, "_blank", "noopener");
 }
 
@@ -464,9 +481,14 @@ function editSws(a) {
   const sel = $("swsBrowser");
   sel.innerHTML = "";
   BROWSERS.forEach(([p, n]) => sel.add(new Option(n, p, false, p === (a.browser || ""))));
+  $("swsAndroid").hidden = !isAndroid; $("swsDesk").hidden = isAndroid;
+  const deskSel = $("swsDeskB");
+  deskSel.innerHTML = "";
+  DESK.forEach(([v, n]) => deskSel.add(new Option(n, v, false, v === (a.desk?.b || ""))));
+  $("swsDeskP").value = a.desk?.p || "";
   $("swsHint").textContent = isAndroid
     ? "Choisis un navigateur différent pour chaque compte : chacun garde sa session SoWeSign, tous restent connectés en même temps. Connecte-toi une fois dans chaque navigateur en cochant « rester connecté »."
-    : "Le choix du navigateur ne fonctionne que sur Android. Sur ordinateur, utilise un profil de navigateur par compte.";
+    : "Sur ordinateur (Windows), installe l'outil du dossier « outil-windows » : indique le navigateur et le dossier du profil où ce compte est connecté (profils.cmd les liste). Sans outil, le lien s'ouvre dans ce navigateur.";
   $("swsHint").textContent += " Pour que le code scanné se remplisse tout seul, installe l'extension du dossier « extension » dans ce navigateur.";
   $("acctForm").hidden = true; $("swsForm").hidden = false;
   if (!$("acctDialog").open) { renderAccounts(); keepConnected(); $("acctDialog").showModal(); }
@@ -483,7 +505,7 @@ function openSws(a) {
   if (isCode(scan) && !a.sws.includes("{scan}")) target = withCode(target, scan, usesIntent(a));
   launch(target, a);
   if (scan) navigator.clipboard?.writeText(scan).catch(() => {});
-  toast("SoWeSign ouvert pour « " + a.name + " »" + (a.browser && isAndroid ? " dans " + browserName(a) : ""));
+  toast("SoWeSign ouvert pour « " + a.name + " »" + (where(a) ? " dans " + where(a) : ""));
 }
 
 // Après un scan : l'organisme est reconnu → un bouton pour le bon compte ; sinon on propose de choisir
@@ -502,7 +524,7 @@ function renderRoute(text) {
     const b = document.createElement("button");
     b.type = "button"; b.className = "btn" + (hits.length === 1 ? " primary" : "");
     const label = document.createElement("span");
-    label.textContent = (hits.length === 1 ? "Signer avec " : "") + a.name + (a.browser && isAndroid ? " · " + browserName(a) : "");
+    label.textContent = (hits.length === 1 ? "Signer avec " : "") + a.name + (where(a) ? " · " + where(a) : "");
     b.append(avatar(a), label);
     b.addEventListener("click", () => openSws(a));
     btns.append(b);
@@ -521,7 +543,7 @@ function renderAccounts() {
     const who = document.createElement("span"); who.className = "who";
     const n = document.createElement("span"); n.className = "name"; n.textContent = a.name;
     const s = document.createElement("span"); s.className = "sub";
-    s.textContent = (pathOf(a) ? pathOf(a) + " · " : "") + scansText(a) + (a.browser ? " · " + browserName(a) : "");
+    s.textContent = (pathOf(a) ? pathOf(a) + " · " : "") + scansText(a) + (where(a) ? " · " + where(a) : "");
     who.append(n, s);
     li.title = a.name + " — connecté depuis " + sinceText(a.since);
     const sw = document.createElement("button");
@@ -555,7 +577,7 @@ function renderAccounts() {
     const n = document.createElement("span"); n.className = "name"; n.textContent = a.name;
     const s = document.createElement("span"); s.className = "sub" + (a.connected ? " on" : "");
     s.textContent = (a.connected ? "Connecté depuis " + sinceText(a.since) : "Déconnecté") + " · " + scansText(a)
-      + (a.sws ? " · SoWeSign" + (a.browser ? " (" + browserName(a) + ")" : "") + (a.match ? " · reconnaît « " + a.match + " »" : "") : "");
+      + (a.sws ? " · SoWeSign" + (where(a) ? " (" + where(a) + ")" : "") + (a.match ? " · reconnaît « " + a.match + " »" : "") : "");
     who.append(n, s);
     b.append(br, avatar(a), who);
     const l = document.createElement("button");
@@ -944,9 +966,12 @@ $("swsForm").addEventListener("submit", e => {
   const a = editing; if (!a) return;
   const url = cleanUrl($("swsUrl").value);
   if (url === null) return toast("Lien SoWeSign invalide");
+  const deskB = $("swsDeskB").value, deskP = $("swsDeskP").value.trim();
+  if (!isAndroid && deskB && !/^[A-Za-z0-9 _-]{1,40}$/.test(deskP)) return toast("Dossier du profil invalide (lettres, chiffres, espace, - et _)");
   a.sws = url;
   a.match = $("swsMatch").value.trim();
   a.browser = $("swsBrowser").value;
+  if (!isAndroid) { if (deskB) a.desk = { b: deskB, p: deskP }; else delete a.desk; }
   closeSws(); refresh();
   if (currentScan()) renderRoute(currentScan());
   toast("Réglages SoWeSign de « " + a.name + " » enregistrés");

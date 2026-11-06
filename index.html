@@ -140,9 +140,11 @@ a.btn { text-decoration: none; color: inherit; }
 /* Comptes : tous les comptes connectés sont actifs en même temps, rangés en branches (parent > enfants) */
 .accounts { padding: 14px 16px; }
 .acct-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); }
-.acct-list li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px; border-radius: 12px;
+.acct-list li { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px 10px; min-width: 0; padding: 10px; border-radius: 12px;
   background: var(--surface-2); border: 1px solid var(--line); }
-.acct-list .who { flex: 1; min-width: 0; display: grid; }
+.acct-list .who { min-width: 0; display: grid; }
+.acct-list .last { color: var(--fg); }
+.acts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
 .acct-list .name, .acct-list .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acct-list .name { font-weight: 700; font-size: .9rem; }
 .acct-list .sub { font-size: .74rem; color: var(--muted); }
@@ -497,14 +499,17 @@ function editSws(a) {
 function closeSws() { editing = null; $("swsForm").hidden = true; $("acctForm").hidden = false; }
 
 const currentScan = () => $("value").hidden ? "" : $("value").textContent;
-function openSws(a) {
-  const scan = currentScan();
+// scan = "" ouvre simplement la session du compte (en cas de souci), sans code
+function openSws(a, scan = currentScan()) {
   // Un QR SoWeSign (lien vers le même site que le compte) est ouvert tel quel ; sinon on ouvre le lien du compte
   let target = a.sws.replaceAll("{scan}", encodeURIComponent(scan));
   try { if (new URL(scan).origin === new URL(target).origin) target = scan; } catch {}
   if (isCode(scan) && !a.sws.includes("{scan}")) target = withCode(target, scan, usesIntent(a));
   launch(target, a);
   if (scan) navigator.clipboard?.writeText(scan).catch(() => {});
+  // Dernier envoi et dernière ouverture de la session, séparés : ouvrir la session ne fait pas perdre le code à renvoyer
+  if (scan) a.sent = { text: scan.slice(0, 200), at: Date.now() }; else a.opened = Date.now();
+  saveAccounts(); renderAccounts();
   toast("SoWeSign ouvert pour « " + a.name + " »" + (where(a) ? " dans " + where(a) : ""));
 }
 
@@ -544,21 +549,29 @@ function renderAccounts() {
     const n = document.createElement("span"); n.className = "name"; n.textContent = a.name;
     const s = document.createElement("span"); s.className = "sub";
     s.textContent = (pathOf(a) ? pathOf(a) + " · " : "") + scansText(a) + (where(a) ? " · " + where(a) : "");
-    who.append(n, s);
+    const last = document.createElement("span"); last.className = "sub last";
+    const sentTxt = a.sent ? "Envoyé : " + a.sent.text + " · " + sinceText(a.sent.at) : "";
+    last.textContent = a.opened > (a.sent?.at ?? 0)
+      ? "Session ouverte · " + sinceText(a.opened) + (a.sent ? " · dernier envoi : " + a.sent.text : "")
+      : sentTxt || "Aucun envoi";
+    last.title = last.textContent;
+    who.append(n, s, last);
     li.title = a.name + " — connecté depuis " + sinceText(a.since);
-    const sw = document.createElement("button");
-    sw.type = "button";
-    if (!a.sws) {
-      sw.className = "sws"; sw.textContent = "Lier SoWeSign";
-      sw.addEventListener("click", () => editSws(a));
-    } else {
-      const send = !!currentScan();
-      sw.className = "sws linked" + (send ? " send" : "");
-      sw.textContent = send ? "Envoyer" : "SoWeSign";
-      sw.title = send ? "Copier le scan et ouvrir SoWeSign pour ce compte" : "Se connecter à SoWeSign pour ce compte";
-      sw.addEventListener("click", () => openSws(a));
+    // Mini-fiche : envoyer le scan affiché, renvoyer le dernier code, ou aller sur la session en un clic
+    const acts = document.createElement("div"); acts.className = "acts";
+    const btn = (label, cls, title, fn) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "sws " + cls; b.textContent = label; b.title = title; b.addEventListener("click", fn);
+      return b;
+    };
+    if (!a.sws) acts.append(btn("Lier SoWeSign", "", "Ajouter le lien SoWeSign de ce compte", () => editSws(a)));
+    else {
+      const scan = currentScan();
+      if (scan) acts.append(btn("Envoyer", "linked send", "Copier le scan et ouvrir SoWeSign pour ce compte", () => openSws(a)));
+      if (a.sent && a.sent.text !== scan) acts.append(btn("Renvoyer", "linked", "Renvoyer le dernier code : " + a.sent.text, () => openSws(a, a.sent.text)));
+      acts.append(btn("Session ↗", "linked", "Ouvrir la session SoWeSign de ce compte, sans code (en cas de souci)", () => openSws(a, "")));
     }
-    li.append(avatar(a), who, sw);
+    li.append(avatar(a), who, acts);
     strip.append(li);
   });
   $("acctCount").textContent = "· " + connectedCount();
@@ -952,7 +965,8 @@ $("copy").addEventListener("click", () => {
 });
 $("clear").addEventListener("click", () => {
   if (!confirm("Effacer l'historique des " + connectedCount() + " compte(s) connecté(s) ?")) return;
-  connected().forEach(a => writeJSON(histKey(a.id), []));
+  connected().forEach(a => { writeJSON(histKey(a.id), []); delete a.sent; delete a.opened; });
+  saveAccounts();
   loadHistory(); renderHistory(); renderAccounts(); toast("Historique effacé");
 });
 document.addEventListener("visibilitychange", () => { if (document.hidden && stream) stop(); });

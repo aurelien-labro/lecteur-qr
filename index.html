@@ -62,7 +62,19 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cov
   opacity: .9; animation: sweep 2.2s ease-in-out infinite alternate; }
 @keyframes sweep { to { top: 90%; } }
 @media (prefers-reduced-motion: reduce) { .laser { animation: none; top: 50%; } }
-.stage:not(.live) .finder, .stage:not(.live) .laser { display: none; }
+.stage:not(.live) .finder, .stage:not(.live) .laser, .stage:not(.live) .zoom { display: none; }
+.stage.live { cursor: crosshair; }
+.ring { position: absolute; width: 70px; height: 70px; margin: -35px 0 0 -35px; border: 2px solid #ffd54a; border-radius: 50%;
+  pointer-events: none; opacity: 0; transform: scale(1.4); }
+.ring.show { animation: focus .9s ease-out; }
+@keyframes focus { 0% { opacity: 1; transform: scale(1.4); } 40% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1); } }
+.hint { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.55); color: #fff;
+  font-size: .78rem; font-weight: 600; padding: 5px 12px; border-radius: 999px; pointer-events: none; white-space: nowrap; }
+.stage:not(.live) .hint { display: none; }
+.zoom { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(70%, 280px); display: flex; align-items: center; gap: 10px;
+  background: rgba(0,0,0,.55); padding: 8px 14px; border-radius: 999px; color: #fff; font-size: .8rem; font-weight: 700; }
+.zoom input { flex: 1; accent-color: #3cc597; min-width: 0; }
+.zoom output { font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: right; }
 
 .cover { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: #e7ede9;
   background: radial-gradient(120% 90% at 50% 40%, #18231f 0%, #0b100e 70%); }
@@ -134,6 +146,11 @@ a.btn { text-decoration: none; color: inherit; }
       <div class="stage" id="stage">
         <video id="video" playsinline muted></video>
         <div class="finder" id="finder" aria-hidden="true"><i></i><i></i><i></i><i></i><span class="laser"></span></div>
+        <span class="hint" id="hint">Touche l'image pour faire la netteté</span>
+        <span class="ring" id="ring" aria-hidden="true"></span>
+        <label class="zoom" id="zoomBox" hidden>
+          Zoom <input type="range" id="zoom" min="1" max="1" step="0.1" value="1"> <output id="zoomVal">1,0×</output>
+        </label>
         <div class="cover" id="cover">
           <div class="cover-inner">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/></svg>
@@ -288,13 +305,27 @@ async function listCams() {
   sel.hidden = devices.length < 2;
 }
 
-async function start(deviceId) {
+// Haute résolution + autofocus continu : plus de détails à lire, et l'objectif refait la netteté en permanence
+const VIDEO = { width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: "continuous" }] };
+
+// Sur Android, la caméra arrière par défaut est parfois l'ultra grand-angle, qui ne fait pas la mise au point de près
+async function mainBackCamera(currentId) {
+  const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+  const main = cams.find(d => /camera2 0|camera 0/i.test(d.label) && /back|arri|rear|environment/i.test(d.label));
+  return main && main.deviceId !== currentId ? main.deviceId : null;
+}
+
+async function start(deviceId, auto = !deviceId) {
   stop();
   if (!navigator.mediaDevices?.getUserMedia) return cover("Caméra indisponible", "Ce navigateur ne permet pas l'accès à la caméra. Utilise l'import d'image.", true);
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: "environment" } }
+      video: deviceId ? { ...VIDEO, deviceId: { exact: deviceId } } : { ...VIDEO, facingMode: { ideal: "environment" } }
     });
+    if (auto) {
+      const better = await mainBackCamera(stream.getVideoTracks()[0].getSettings().deviceId);
+      if (better) return start(better, false);
+    }
   } catch (e) {
     stream = null;
     return cover("Caméra indisponible", e.name === "NotAllowedError"
@@ -305,33 +336,87 @@ async function start(deviceId) {
   await video.play().catch(() => {});
   setStatus(true);
   const track = stream.getVideoTracks()[0];
-  const caps = track.getCapabilities?.() || {};
+  caps = track.getCapabilities?.() || {};
   $("torch").hidden = !caps.torch;
   torchOn = false; $("torch").setAttribute("aria-pressed", "false");
+  if (caps.focusMode?.includes("continuous")) track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
+  setupZoom(track);
   listCams();
   requestAnimationFrame(tick);
 }
+
+let caps = {}, refocusTimer;
+
+function setupZoom(track) {
+  const z = caps.zoom, box = $("zoomBox"), input = $("zoom");
+  box.hidden = !z || z.max <= z.min;
+  if (box.hidden) return;
+  input.min = z.min; input.max = Math.min(z.max, 8); input.step = z.step || 0.1;
+  input.value = track.getSettings().zoom || z.min;
+  $("zoomVal").textContent = Number(input.value).toLocaleString("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "×";
+}
+
+$("zoom").addEventListener("input", e => {
+  const track = stream?.getVideoTracks()[0]; if (!track) return;
+  const v = Number(e.target.value);
+  $("zoomVal").textContent = v.toLocaleString("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "×";
+  track.applyConstraints({ advanced: [{ zoom: v }] }).catch(() => {});
+});
+$("zoomBox").addEventListener("pointerdown", e => e.stopPropagation());
+
+// Toucher l'image : mise au point sur ce point (si l'appareil le permet), sinon relance de l'autofocus
+$("stage").addEventListener("pointerdown", async e => {
+  const track = stream?.getVideoTracks()[0]; if (!track) return;
+  const r = $("stage").getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  const ring = $("ring");
+  ring.style.left = x + "px"; ring.style.top = y + "px";
+  ring.classList.remove("show"); void ring.offsetWidth; ring.classList.add("show");
+  $("hint").hidden = true;
+  const modes = caps.focusMode || [];
+  const c = {};
+  if (caps.pointsOfInterest) c.pointsOfInterest = [{ x: x / r.width, y: y / r.height }];
+  if (modes.includes("single-shot")) c.focusMode = "single-shot";
+  else if (modes.includes("continuous")) c.focusMode = "continuous";
+  if (!Object.keys(c).length) return;
+  try { await track.applyConstraints({ advanced: [c] }); } catch {}
+  clearTimeout(refocusTimer);
+  if (c.focusMode === "single-shot" && modes.includes("continuous"))
+    refocusTimer = setTimeout(() => track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {}), 2500);
+});
 
 function stop() {
   stream?.getTracks().forEach(t => t.stop());
   stream = null;
   video.srcObject = null;
   $("torch").hidden = true;
+  $("zoomBox").hidden = true;
+  clearTimeout(refocusTimer);
   setStatus(false);
   cover("Prêt à scanner", "Active la caméra et place un QR code dans le cadre.");
 }
 
+// Alterne entre le centre de l'image en pleine résolution (petits QR, plus nets)
+// et l'image entière réduite (QR proches ou décentrés)
+let frame = 0;
 function tick() {
   if (!stream) return;
-  if (video.readyState >= 2 && video.videoWidth) {
-    const w = 720, h = Math.round(video.videoHeight * w / video.videoWidth);
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (video.readyState >= 2 && vw) {
+    let sx = 0, sy = 0, sw = vw, sh = vh;
+    if (frame++ % 2 === 0) {
+      const side = Math.round(Math.min(vw, vh) * 0.7);
+      sx = (vw - side) / 2; sy = (vh - side) / 2; sw = sh = side;
+    }
+    const scale = Math.min(1, 900 / Math.max(sw, sh));
+    const w = Math.round(sw * scale), h = Math.round(sh * scale);
     canvas.width = w; canvas.height = h;
-    ctx.drawImage(video, 0, 0, w, h);
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
     const img = ctx.getImageData(0, 0, w, h);
     const code = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
     if (code && code.data) found(code.data);
   }
-  setTimeout(() => requestAnimationFrame(tick), 110);
+  setTimeout(() => requestAnimationFrame(tick), 90);
 }
 
 function decodeFile(file) {

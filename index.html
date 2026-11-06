@@ -556,20 +556,24 @@ function openSws(a, scan = currentScan()) {
 // Après un scan : l'organisme est reconnu → un bouton pour le bon compte ; sinon on propose de choisir
 function renderRoute(text) {
   const box = $("route"), btns = $("routeBtns");
-  const hits = matchAccounts(text), sws = /sowesign/i.test(text);
+  // Un QR qui ne contient qu'un code (« Dzb ») n'a pas le nom de l'organisme : on propose les comptes SoWeSign
+  const hits = matchAccounts(text), sws = /sowesign/i.test(text) || !!extractCode(text);
   const options = hits.length ? hits : sws ? connected().filter(a => a.sws) : [];
   box.hidden = !options.length;
   if (box.hidden) return;
-  box.classList.toggle("unknown", !hits.length);
+  const sure = hits.length === 1 || (!hits.length && options.length === 1);   // un seul choix possible : bouton principal
+  box.classList.toggle("unknown", !sure && !hits.length);
   $("routeTitle").textContent = hits.length === 1 ? "Organisme reconnu : " + hits[0].name
     : hits.length ? "Plusieurs comptes reconnaissent ce QR"
-    : "Organisme non reconnu : choisis le compte (ajoute un mot-clé dans Gérer pour la prochaine fois)";
+    : options.length === 1 ? "Un seul compte lié à SoWeSign"
+    : /sowesign/i.test(text) ? "Organisme non reconnu : choisis le compte (ajoute un mot-clé dans Gérer pour la prochaine fois)"
+    : "Pour quel compte est ce code ? Le QR ne contient pas le nom de l'organisme.";
   btns.innerHTML = "";
   options.forEach(a => {
     const b = document.createElement("button");
-    b.type = "button"; b.className = "btn" + (hits.length === 1 ? " primary" : "");
+    b.type = "button"; b.className = "btn" + (sure ? " primary" : "");
     const label = document.createElement("span");
-    label.textContent = (hits.length === 1 ? "Signer avec " : "") + a.name + (where(a) ? " · " + where(a) : "");
+    label.textContent = (sure ? "Signer avec " : "") + a.name + (where(a) ? " · " + where(a) : "");
     b.append(avatar(a), label);
     b.addEventListener("click", () => openSws(a));
     btns.append(b);
@@ -951,7 +955,39 @@ let detector = null;
   } catch {}
 })();
 
-let frame = 0;
+// jsQR lit mal un QR flou ou peu contrasté (photo d'un écran, par exemple) : on réessaie avec le contraste étiré
+// entre les percentiles 2 % et 98 %, puis avec un léger flou qui efface la trame des écrans.
+function boxBlur(g, w, h) {
+  const t = new Float32Array(g.length), o = new Float32Array(g.length);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    t[i] = (g[x > 0 ? i - 1 : i] + g[i] + g[x < w - 1 ? i + 1 : i]) / 3;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    o[i] = (t[y > 0 ? i - w : i] + t[i] + t[y < h - 1 ? i + w : i]) / 3;
+  }
+  return o;
+}
+function enhance(d, blurPasses = 0) {
+  const { width: w, height: h, data } = d, n = w * h, hist = new Uint32Array(256);
+  let g = new Float32Array(n);
+  for (let i = 0; i < n; i++) { g[i] = .299 * data[i * 4] + .587 * data[i * 4 + 1] + .114 * data[i * 4 + 2]; hist[g[i] | 0]++; }
+  const pct = p => { let acc = 0; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n * p) return v; } return 255; };
+  const lo = pct(.02), hi = Math.max(lo + 1, pct(.98)), k = 255 / (hi - lo);
+  for (let i = 0; i < n; i++) g[i] = Math.max(0, Math.min(255, (g[i] - lo) * k));
+  for (let p = 0; p < blurPasses; p++) g = boxBlur(g, w, h);
+  const out = new Uint8ClampedArray(n * 4);
+  for (let i = 0; i < n; i++) { out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = g[i]; out[i * 4 + 3] = 255; }
+  return out;
+}
+// Image fixe : on essaie tout, dans l'ordre du moins au plus coûteux
+function decodeStill(d) {
+  const read = data => jsQR(data, d.width, d.height, { inversionAttempts: "attemptBoth" });
+  return read(d.data) || read(enhance(d)) || read(enhance(d, 1)) || read(enhance(d, 2));
+}
+
+let frame = 0, tries = 0;
 async function tick() {
   if (!stream) return;
   const vw = video.videoWidth, vh = video.videoHeight;
@@ -971,7 +1007,9 @@ async function tick() {
     canvas.width = w; canvas.height = h;
     ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
     const img = ctx.getImageData(0, 0, w, h);
-    const code = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
+    // En direct : image brute à chaque tour, version améliorée un tour sur trois pour ne pas chauffer le téléphone
+    let code = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
+    if (!code && tries++ % 3 === 0) code = jsQR(enhance(img, tries % 2), w, h, { inversionAttempts: "dontInvert" });
     if (code && code.data) found(code.data);
   }
   setTimeout(() => requestAnimationFrame(tick), detector ? 60 : 90);
@@ -986,7 +1024,7 @@ function decodeFile(file) {
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     URL.revokeObjectURL(img.src);
     const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(d.data, d.width, d.height, { inversionAttempts: "attemptBoth" });
+    const code = decodeStill(d);
     if (code && code.data) { last = ""; found(code.data); } else toast("Aucun QR code trouvé dans l'image");
   };
   img.onerror = () => toast("Image illisible");

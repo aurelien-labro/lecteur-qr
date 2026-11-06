@@ -151,6 +151,14 @@ a.btn { text-decoration: none; color: inherit; }
   border: 1px dashed var(--line); background: var(--surface); color: var(--muted); }
 .sws.linked { border-style: solid; border-color: var(--accent); color: var(--accent); }
 .sws.send { background: var(--accent); color: var(--accent-fg); }
+/* Organisme reconnu dans le QR : bouton pour ouvrir SoWeSign avec le bon compte */
+.route { min-width: 0; display: grid; gap: 10px; padding: 12px; border-radius: 12px; border: 1px solid var(--accent); background: var(--accent-soft); }
+.route.unknown { border-color: var(--line); background: var(--surface-2); }
+.route-title { font-size: .85rem; font-weight: 700; }
+.route-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.route-btns { min-width: 0; }
+.route-btns .btn { flex: 1 1 180px; justify-content: flex-start; min-width: 0; max-width: 100%; }
+.route-btns .btn span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .avatar { position: relative; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; flex: none;
   color: #fff; font-weight: 800; font-size: .8rem; text-transform: uppercase; }
 /* Pastille d'état : verte si connecté, grise sinon */
@@ -223,6 +231,17 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         <label>Lien SoWeSign <input id="acctSws" type="text" inputmode="url" placeholder="https://app.sowesign.com/ (par défaut)" autocomplete="off"></label>
         <button class="btn primary" type="submit">Connecter</button>
       </form>
+      <form class="add" id="swsForm" hidden>
+        <span class="eyebrow" id="swsTitle"></span>
+        <label>Lien SoWeSign <input id="swsUrl" type="text" inputmode="url" placeholder="Vide = pas de SoWeSign pour ce compte" autocomplete="off"></label>
+        <label>Reconnaître ses QR <input id="swsMatch" maxlength="200" placeholder="Mot-clé présent dans les QR de cet organisme" autocomplete="off"></label>
+        <label>Ouvrir avec <select id="swsBrowser"></select></label>
+        <p class="keep" id="swsHint"></p>
+        <div class="actions">
+          <button class="btn" type="button" id="swsCancel">Annuler</button>
+          <button class="btn primary" type="submit">Enregistrer</button>
+        </div>
+      </form>
     </div>
   </dialog>
 
@@ -284,6 +303,10 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         </div>
         <p class="empty" id="empty">Aucun QR code lu pour l'instant. Le contenu apparaîtra ici dès la détection.</p>
         <pre class="value" id="value" hidden></pre>
+        <div class="route" id="route" hidden>
+          <span class="route-title" id="routeTitle"></span>
+          <div class="route-btns" id="routeBtns"></div>
+        </div>
         <div class="actions" id="actions" hidden>
           <button class="btn" id="copy" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
@@ -398,24 +421,78 @@ function cleanUrl(v) {
   if (!/^[a-z]+:/i.test(v)) v = "https://" + v;
   try { const u = new URL(v.replace("{scan}", "")); return /^https?:$/.test(u.protocol) ? v : null; } catch { return null; }
 }
-function editSws(a) {
-  const v = prompt("Lien SoWeSign pour « " + a.name + " » (vide pour retirer).\n{scan} dans le lien sera remplacé par le contenu scanné.", a.sws || "");
-  if (v === null) return;
-  const url = cleanUrl(v);
-  if (url === null) return toast("Lien invalide");
-  a.sws = url;
-  refresh();
-  toast(url ? "SoWeSign lié à « " + a.name + " »" : "SoWeSign retiré de « " + a.name + " »");
+// Un navigateur par compte : chaque navigateur garde sa propre session SoWeSign, donc tous les comptes
+// restent connectés en même temps. Sur Android, un lien intent:// ouvre la page dans le navigateur choisi.
+const BROWSERS = [["", "Ce navigateur"], ["com.android.chrome", "Chrome"], ["org.mozilla.firefox", "Firefox"],
+  ["com.microsoft.emmx", "Edge"], ["com.sec.android.app.sbrowser", "Samsung Internet"], ["com.brave.browser", "Brave"],
+  ["com.opera.browser", "Opera"], ["com.duckduckgo.mobile.android", "DuckDuckGo"]];
+const isAndroid = /Android/i.test(navigator.userAgent);
+const browserName = a => (BROWSERS.find(([p]) => p === a.browser) || BROWSERS[0])[1];
+
+function launch(url, a) {
+  const u = new URL(url);
+  if (a.browser && isAndroid && !u.hash) {
+    location.href = "intent://" + u.host + u.pathname + u.search + "#Intent;scheme=" + u.protocol.slice(0, -1)
+      + ";package=" + a.browser + ";S.browser_fallback_url=" + encodeURIComponent(url) + ";end";
+  } else window.open(url, "_blank", "noopener");
 }
+
+// Comptes dont le mot-clé de reconnaissance apparaît dans le QR (plusieurs mots-clés séparés par des virgules)
+function matchAccounts(scan) {
+  const s = scan.toLowerCase();
+  return connected().filter(a => a.sws && (a.match || "").split(",").map(k => k.trim().toLowerCase()).some(k => k && s.includes(k)));
+}
+
+let editing = null;
+function editSws(a) {
+  editing = a;
+  $("swsTitle").textContent = "SoWeSign de « " + a.name + " »";
+  $("swsUrl").value = a.sws || "";
+  $("swsMatch").value = a.match || "";
+  const sel = $("swsBrowser");
+  sel.innerHTML = "";
+  BROWSERS.forEach(([p, n]) => sel.add(new Option(n, p, false, p === (a.browser || ""))));
+  $("swsHint").textContent = isAndroid
+    ? "Choisis un navigateur différent pour chaque compte : chacun garde sa session SoWeSign, tous restent connectés en même temps. Connecte-toi une fois dans chaque navigateur en cochant « rester connecté »."
+    : "Le choix du navigateur ne fonctionne que sur Android. Sur ordinateur, utilise un profil de navigateur par compte.";
+  $("acctForm").hidden = true; $("swsForm").hidden = false;
+  if (!$("acctDialog").open) { renderAccounts(); keepConnected(); $("acctDialog").showModal(); }
+  $("swsForm").scrollIntoView({ block: "nearest" });
+}
+function closeSws() { editing = null; $("swsForm").hidden = true; $("acctForm").hidden = false; }
+
 const currentScan = () => $("value").hidden ? "" : $("value").textContent;
 function openSws(a) {
   const scan = currentScan();
   // Un QR SoWeSign (lien vers le même site que le compte) est ouvert tel quel ; sinon on ouvre le lien du compte
   let target = a.sws.replaceAll("{scan}", encodeURIComponent(scan));
   try { if (new URL(scan).origin === new URL(target).origin) target = scan; } catch {}
-  window.open(target, "_blank", "noopener");
+  launch(target, a);
   if (scan) navigator.clipboard?.writeText(scan).catch(() => {});
-  toast(scan ? "Scan copié, SoWeSign ouvert pour « " + a.name + " »" : "SoWeSign ouvert pour « " + a.name + " »");
+  toast("SoWeSign ouvert pour « " + a.name + " »" + (a.browser && isAndroid ? " dans " + browserName(a) : ""));
+}
+
+// Après un scan : l'organisme est reconnu → un bouton pour le bon compte ; sinon on propose de choisir
+function renderRoute(text) {
+  const box = $("route"), btns = $("routeBtns");
+  const hits = matchAccounts(text), sws = /sowesign/i.test(text);
+  const options = hits.length ? hits : sws ? connected().filter(a => a.sws) : [];
+  box.hidden = !options.length;
+  if (box.hidden) return;
+  box.classList.toggle("unknown", !hits.length);
+  $("routeTitle").textContent = hits.length === 1 ? "Organisme reconnu : " + hits[0].name
+    : hits.length ? "Plusieurs comptes reconnaissent ce QR"
+    : "Organisme non reconnu : choisis le compte (ajoute un mot-clé dans Gérer pour la prochaine fois)";
+  btns.innerHTML = "";
+  options.forEach(a => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "btn" + (hits.length === 1 ? " primary" : "");
+    const label = document.createElement("span");
+    label.textContent = (hits.length === 1 ? "Signer avec " : "") + a.name + (a.browser && isAndroid ? " · " + browserName(a) : "");
+    b.append(avatar(a), label);
+    b.addEventListener("click", () => openSws(a));
+    btns.append(b);
+  });
 }
 
 const scansText = a => { const n = (readJSON(histKey(a.id)) || []).length; return n + " scan" + (n > 1 ? "s" : ""); };
@@ -430,7 +507,7 @@ function renderAccounts() {
     const who = document.createElement("span"); who.className = "who";
     const n = document.createElement("span"); n.className = "name"; n.textContent = a.name;
     const s = document.createElement("span"); s.className = "sub";
-    s.textContent = (pathOf(a) ? pathOf(a) + " · " : "") + scansText(a);
+    s.textContent = (pathOf(a) ? pathOf(a) + " · " : "") + scansText(a) + (a.browser ? " · " + browserName(a) : "");
     who.append(n, s);
     li.title = a.name + " — connecté depuis " + sinceText(a.since);
     const sw = document.createElement("button");
@@ -464,11 +541,11 @@ function renderAccounts() {
     const n = document.createElement("span"); n.className = "name"; n.textContent = a.name;
     const s = document.createElement("span"); s.className = "sub" + (a.connected ? " on" : "");
     s.textContent = (a.connected ? "Connecté depuis " + sinceText(a.since) : "Déconnecté") + " · " + scansText(a)
-      + (a.sws ? " · SoWeSign lié" : "");
+      + (a.sws ? " · SoWeSign" + (a.browser ? " (" + browserName(a) + ")" : "") + (a.match ? " · reconnaît « " + a.match + " »" : "") : "");
     who.append(n, s);
     b.append(br, avatar(a), who);
     const l = document.createElement("button");
-    l.type = "button"; l.className = "link toggle"; l.title = a.sws ? "Modifier le lien SoWeSign" : "Lier SoWeSign";
+    l.type = "button"; l.className = "link toggle"; l.title = a.sws ? "Réglages SoWeSign" : "Lier SoWeSign";
     l.setAttribute("aria-label", l.title + " de " + a.name);
     l.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg><span>SoWeSign</span>';
     if (a.sws) l.style.color = "var(--accent)";
@@ -586,12 +663,13 @@ function showResult(text) {
   const open = $("open");
   open.hidden = kind !== "Lien";
   if (kind === "Lien") open.href = text; else open.removeAttribute("href");
+  renderRoute(text);
   renderAccounts();  // les boutons SoWeSign passent en « Envoyer »
 }
 
 function clearResult() {
   $("empty").hidden = false;
-  $("value").hidden = true; $("kind").hidden = true; $("actions").hidden = true;
+  $("value").hidden = true; $("kind").hidden = true; $("actions").hidden = true; $("route").hidden = true;
 }
 
 function renderHistory() {
@@ -845,6 +923,20 @@ document.addEventListener("visibilitychange", () => { if (document.hidden && str
 
 $("acctManage").addEventListener("click", () => { renderAccounts(); keepConnected(); $("acctDialog").showModal(); });
 $("acctClose").addEventListener("click", () => $("acctDialog").close());
+$("acctDialog").addEventListener("close", closeSws);
+$("swsCancel").addEventListener("click", closeSws);
+$("swsForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const a = editing; if (!a) return;
+  const url = cleanUrl($("swsUrl").value);
+  if (url === null) return toast("Lien SoWeSign invalide");
+  a.sws = url;
+  a.match = $("swsMatch").value.trim();
+  a.browser = $("swsBrowser").value;
+  closeSws(); refresh();
+  if (currentScan()) renderRoute(currentScan());
+  toast("Réglages SoWeSign de « " + a.name + " » enregistrés");
+});
 $("acctDialog").addEventListener("click", e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 $("acctForm").addEventListener("submit", e => {
   e.preventDefault();

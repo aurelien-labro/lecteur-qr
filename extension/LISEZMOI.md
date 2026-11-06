@@ -7,7 +7,7 @@ Une extension s'installe par navigateur (ou par profil de navigateur) : un navig
 ## Installation
 
 - **Chrome, Edge, Brave (ordinateur)** : ouvre `chrome://extensions` (ou `edge://extensions`), active le *Mode développeur*, clique sur *Charger l'extension non empaquetée* et choisis ce dossier `extension`.
-- **Firefox (ordinateur)** : ouvre `about:debugging#/runtime/this-firefox`, clique sur *Charger un module complémentaire temporaire* et choisis `manifest.json`. Il disparaît au redémarrage de Firefox ; pour le garder, il faut le faire signer sur addons.mozilla.org.
+- **Firefox (ordinateur)** : Firefox a besoin de son propre manifeste. Copie ce dossier `extension` ailleurs et, dans la copie, remplace `manifest.json` par le contenu de `manifest.firefox.json`. Ouvre ensuite `about:debugging#/runtime/this-firefox`, clique sur *Charger un module complémentaire temporaire* et choisis le `manifest.json` de la copie. Il disparaît au redémarrage de Firefox ; pour le garder, il faut le faire signer sur addons.mozilla.org. (Chrome et Edge affichent un avertissement si le manifeste contient les clés propres à Firefox : c'est pourquoi il y en a deux.)
 - **Android** : Chrome n'accepte pas les extensions. Firefox pour Android les accepte, mais seulement signées.
 
 ## Réglage, une seule fois par navigateur

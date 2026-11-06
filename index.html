@@ -2,86 +2,282 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0e1412">
 <title>Lecteur QR</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
-/* Layout: une seule colonne, vidéo en haut, dernier résultat puis historique */
+/* Layout: barre du haut, puis viseur + panneau résultat ; deux colonnes à partir de 900px */
 :root {
-  --bg: #f3f5f4; --surface: #ffffff; --fg: #17201d; --muted: #5d6b66;
-  --line: #d6ddda; --accent: #0f7a5c; --accent-fg: #ffffff; --warn: #a4471b;
-  --display: "Sora", system-ui, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --bg: #eef1ef; --surface: #ffffff; --surface-2: #f6f8f7; --fg: #121a17; --muted: #5f6d68;
+  --line: #dbe2df; --accent: #0b7a5a; --accent-soft: #dcf0e8; --accent-fg: #ffffff;
+  --warn: #b0451a; --warn-soft: #fbe7dd; --stage: #0b100e;
+  --sans: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --radius: 16px;
 }
 @media (prefers-color-scheme: dark) { :root {
-  --bg: #111715; --surface: #1a2320; --fg: #e6ece9; --muted: #95a39e;
-  --line: #2c3834; --accent: #3fc79c; --accent-fg: #06130f; --warn: #f08a5d; color-scheme: dark } }
+  --bg: #0e1412; --surface: #161e1b; --surface-2: #1c2521; --fg: #e7ede9; --muted: #93a29c;
+  --line: #27322e; --accent: #3cc597; --accent-soft: #173a2e; --accent-fg: #04130d;
+  --warn: #f08a5d; --warn-soft: #3a2017; --stage: #000000; color-scheme: dark } }
+
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
-.wrap { max-width: 640px; margin: 0 auto; padding: 28px 16px 48px; display: grid; gap: 18px; }
-h1 { font-family: var(--display); font-size: 1.6rem; margin: 0; }
-.sub { color: var(--muted); margin: 4px 0 0; }
-.stage { position: relative; background: #000; border-radius: 14px; overflow: hidden; aspect-ratio: 4 / 3; max-width: 100%; }
-video { width: 100%; height: 100%; object-fit: cover; display: block; }
-.frame { position: absolute; inset: 18%; border: 3px solid rgba(255,255,255,.85); border-radius: 16px; pointer-events: none; transition: border-color .15s; }
-.frame.hit { border-color: var(--accent); }
-.idle { position: absolute; inset: 0; display: grid; place-items: center; color: #cfd8d4; text-align: center; padding: 16px; }
-.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.btn { font: 600 1rem var(--display); background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 10px; padding: 11px 18px; cursor: pointer; }
-.btn.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
-.btn:focus-visible, select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
-select { font: inherit; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); max-width: 100%; }
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 8px; min-width: 0; }
-.label { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-.value { font-family: var(--mono); word-break: break-all; white-space: pre-wrap; margin: 0; }
-.err { color: var(--warn); }
-ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
-ol li { font-family: var(--mono); font-size: .9rem; word-break: break-all; }
-ol time { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 500 15px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+button, select { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.app { max-width: 1120px; margin: 0 auto; min-height: 100dvh; display: flex; flex-direction: column;
+  padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); gap: 16px; }
+
+/* Barre du haut */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1.05rem; letter-spacing: -0.01em; }
+.mark { width: 32px; height: 32px; border-radius: 9px; background: var(--accent); display: grid; place-items: center; }
+.mark svg { width: 18px; height: 18px; }
+.status { display: inline-flex; align-items: center; gap: 8px; font-size: .8rem; font-weight: 600; color: var(--muted);
+  background: var(--surface); border: 1px solid var(--line); padding: 6px 12px; border-radius: 999px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.status.on { color: var(--accent); }
+.status.on .dot { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+
+.grid { display: grid; gap: 16px; flex: 1; align-content: start; }
+@media (min-width: 900px) { .grid { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: start; } }
+
+/* Viseur */
+.scanner { display: grid; gap: 12px; }
+.stage { position: relative; background: var(--stage); border-radius: var(--radius); overflow: hidden; aspect-ratio: 3 / 4; max-height: 70dvh; width: 100%; }
+@media (min-width: 600px) { .stage { aspect-ratio: 4 / 3; } }
+video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.finder { position: absolute; top: 50%; left: 50%; width: min(62%, 300px); aspect-ratio: 1; transform: translate(-50%, -50%); pointer-events: none; }
+.finder i { position: absolute; width: 34px; height: 34px; border: 4px solid #fff; transition: border-color .15s; }
+.finder i:nth-child(1) { top: 0; left: 0; border-right: 0; border-bottom: 0; border-top-left-radius: 14px; }
+.finder i:nth-child(2) { top: 0; right: 0; border-left: 0; border-bottom: 0; border-top-right-radius: 14px; }
+.finder i:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; border-bottom-left-radius: 14px; }
+.finder i:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; border-bottom-right-radius: 14px; }
+.finder.hit i { border-color: #3cc597; }
+.laser { position: absolute; left: 8%; right: 8%; height: 2px; top: 10%; background: linear-gradient(90deg, transparent, #3cc597, transparent);
+  opacity: .9; animation: sweep 2.2s ease-in-out infinite alternate; }
+@keyframes sweep { to { top: 90%; } }
+@media (prefers-reduced-motion: reduce) { .laser { animation: none; top: 50%; } }
+.stage:not(.live) .finder, .stage:not(.live) .laser { display: none; }
+
+.cover { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: #e7ede9;
+  background: radial-gradient(120% 90% at 50% 40%, #18231f 0%, #0b100e 70%); }
+.cover-inner { display: grid; gap: 14px; justify-items: center; max-width: 300px; }
+.cover svg { width: 56px; height: 56px; opacity: .9; }
+.cover h2 { margin: 0; font-size: 1.15rem; font-weight: 700; }
+.cover p { margin: 0; color: #9fb0a9; font-size: .9rem; }
+.cover.error p { color: #f3a27e; }
+
+/* Boutons */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid transparent; border-radius: 12px;
+  padding: 11px 16px; font-weight: 700; cursor: pointer; background: var(--surface); border-color: var(--line); transition: background .15s, transform .05s; }
+.btn:active { transform: scale(.98); }
+.btn svg { width: 18px; height: 18px; flex: none; }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.btn.icon { padding: 11px; }
+.btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.btn:disabled { opacity: .5; cursor: default; }
+.controls { display: flex; gap: 10px; flex-wrap: wrap; }
+.controls .grow { flex: 1 1 160px; }
+select.btn { appearance: none; padding-right: 34px; flex: 1 1 140px; min-width: 0; text-overflow: ellipsis;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237d8b86' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center; background-size: 16px; }
+
+/* Panneaux */
+.side { display: grid; gap: 16px; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.eyebrow { font-size: .72rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+.chip { font-size: .75rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+.value { font-family: var(--mono); font-size: .95rem; margin: 0; padding: 14px; border-radius: 12px; background: var(--surface-2);
+  border: 1px solid var(--line); word-break: break-all; white-space: pre-wrap; max-height: 220px; overflow: auto; }
+.empty { color: var(--muted); margin: 0; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.actions .btn { flex: 1 1 120px; }
+a.btn { text-decoration: none; color: inherit; }
+
+.history { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 340px; overflow: auto; }
+.history button { width: 100%; text-align: left; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: baseline;
+  background: none; border: 0; padding: 10px 8px; border-radius: 10px; cursor: pointer; }
+.history button:hover { background: var(--surface-2); }
+.history time { font-family: var(--mono); font-size: .78rem; color: var(--muted); font-variant-numeric: tabular-nums; grid-row: span 2; padding-top: 2px; }
+.history .kind { font-size: .72rem; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .06em; }
+.history .txt { font-family: var(--mono); font-size: .86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.link { background: none; border: 0; color: var(--muted); font-weight: 700; font-size: .82rem; cursor: pointer; padding: 4px 6px; border-radius: 8px; }
+.link:hover { color: var(--fg); }
+
+.toast { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translate(-50%, 20px); opacity: 0;
+  background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-weight: 700; font-size: .9rem; transition: .2s; pointer-events: none; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.foot { text-align: center; color: var(--muted); font-size: .8rem; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <h1>Lecteur QR</h1>
-    <p class="sub">Active la caméra et place le QR code dans le cadre : il est lu automatiquement.</p>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 12h8"/></svg>
+      </span>
+      Lecteur QR
+    </div>
+    <span class="status" id="status"><span class="dot"></span><span id="statusText">En pause</span></span>
   </header>
 
-  <div class="stage">
-    <video id="video" playsinline muted></video>
-    <div class="frame" id="frame"></div>
-    <div class="idle" id="idle">Caméra éteinte</div>
-  </div>
+  <main class="grid">
+    <section class="scanner" aria-label="Scanner">
+      <div class="stage" id="stage">
+        <video id="video" playsinline muted></video>
+        <div class="finder" id="finder" aria-hidden="true"><i></i><i></i><i></i><i></i><span class="laser"></span></div>
+        <div class="cover" id="cover">
+          <div class="cover-inner">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+            <h2 id="coverTitle">Prêt à scanner</h2>
+            <p id="coverText">Active la caméra et place un QR code dans le cadre.</p>
+            <button class="btn primary" id="startBig" type="button">Activer la caméra</button>
+          </div>
+        </div>
+      </div>
 
-  <div class="row">
-    <button class="btn" id="toggle" type="button">Activer la caméra</button>
-    <select id="cams" hidden aria-label="Choisir la caméra"></select>
-  </div>
+      <div class="controls">
+        <button class="btn primary grow" id="toggle" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+          <span id="toggleText">Activer la caméra</span>
+        </button>
+        <select class="btn" id="cams" hidden aria-label="Choisir la caméra"></select>
+        <button class="btn icon" id="torch" type="button" aria-pressed="false" aria-label="Lampe" title="Lampe" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12v5l-3 4v11H9V11L6 7z"/><path d="M12 14v2"/></svg>
+        </button>
+        <label class="btn icon" for="file" title="Importer une image" aria-label="Importer une image">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
+        </label>
+        <input id="file" type="file" accept="image/*" hidden>
+      </div>
+    </section>
 
-  <section class="card">
-    <span class="label" id="kind">Dernier scan</span>
-    <pre class="value" id="value">Aucun QR lu pour l'instant.</pre>
-    <div class="row"><button class="btn ghost" id="copy" type="button" hidden>Copier</button></div>
-  </section>
+    <aside class="side">
+      <section class="panel" aria-live="polite">
+        <div class="panel-head">
+          <span class="eyebrow">Résultat</span>
+          <span class="chip" id="kind" hidden></span>
+        </div>
+        <p class="empty" id="empty">Aucun QR code lu pour l'instant. Le contenu apparaîtra ici dès la détection.</p>
+        <pre class="value" id="value" hidden></pre>
+        <div class="actions" id="actions" hidden>
+          <button class="btn" id="copy" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+            Copier
+          </button>
+          <a class="btn primary" id="open" target="_blank" rel="noopener noreferrer" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+            Ouvrir le lien
+          </a>
+        </div>
+      </section>
 
-  <section class="card">
-    <span class="label">Historique</span>
-    <ol id="history"></ol>
-  </section>
+      <section class="panel">
+        <div class="panel-head">
+          <span class="eyebrow">Historique <span id="count"></span></span>
+          <button class="link" id="clear" type="button" hidden>Effacer</button>
+        </div>
+        <p class="empty" id="histEmpty">Les codes scannés s'afficheront ici, du plus récent au plus ancien.</p>
+        <ol class="history" id="history"></ol>
+      </section>
+    </aside>
+  </main>
+
+  <p class="foot">Tout est traité sur cet appareil. Aucune image ni donnée n'est envoyée.</p>
 </div>
+<div class="toast" id="toast" role="status"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const video = $("video"), canvas = document.createElement("canvas");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
-let stream = null, last = "", lastAt = 0;
+const KEY = "lecteur-qr-historique";
+let stream = null, last = "", lastAt = 0, torchOn = false;
+let history = [];
+try { history = JSON.parse(localStorage.getItem(KEY)) || []; } catch {}
 
-function show(kind, text, isErr) {
-  $("kind").textContent = kind;
-  $("value").textContent = text;
-  $("value").classList.toggle("err", !!isErr);
-  $("copy").hidden = !!isErr;
+function kindOf(t) {
+  if (/^https?:\/\//i.test(t)) return "Lien";
+  if (/^WIFI:/i.test(t)) return "Wi-Fi";
+  if (/^mailto:|^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(t)) return "E-mail";
+  if (/^tel:/i.test(t)) return "Téléphone";
+  if (/^BEGIN:VCARD/i.test(t)) return "Contact";
+  if (/^\d{8,14}$/.test(t)) return "Code";
+  return "Texte";
+}
+
+function toast(msg) {
+  const el = $("toast");
+  el.textContent = msg; el.classList.add("show");
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("show"), 1600);
+}
+
+function setStatus(on) {
+  $("status").classList.toggle("on", on);
+  $("statusText").textContent = on ? "Caméra active" : "En pause";
+  $("stage").classList.toggle("live", on);
+  $("cover").hidden = on;
+  $("toggleText").textContent = on ? "Mettre en pause" : "Activer la caméra";
+  $("toggle").classList.toggle("primary", !on);
+}
+
+function cover(title, text, isErr) {
+  $("coverTitle").textContent = title;
+  $("coverText").textContent = text;
+  $("cover").classList.toggle("error", !!isErr);
+}
+
+function showResult(text) {
+  const kind = kindOf(text);
+  $("empty").hidden = true;
+  $("value").hidden = false; $("value").textContent = text;
+  $("kind").hidden = false; $("kind").textContent = kind; $("kind").classList.remove("warn");
+  $("actions").hidden = false;
+  const open = $("open");
+  open.hidden = kind !== "Lien";
+  if (kind === "Lien") open.href = text; else open.removeAttribute("href");
+}
+
+function renderHistory() {
+  const list = $("history");
+  list.innerHTML = "";
+  history.forEach(h => {
+    const li = document.createElement("li"), b = document.createElement("button");
+    b.type = "button";
+    const t = document.createElement("time"); t.textContent = new Date(h.at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    const k = document.createElement("span"); k.className = "kind"; k.textContent = kindOf(h.text);
+    const x = document.createElement("span"); x.className = "txt"; x.textContent = h.text;
+    b.append(t, k, x);
+    b.addEventListener("click", () => showResult(h.text));
+    li.append(b); list.append(li);
+  });
+  $("histEmpty").hidden = history.length > 0;
+  $("clear").hidden = history.length === 0;
+  $("count").textContent = history.length ? "· " + history.length : "";
+}
+
+function save() { try { localStorage.setItem(KEY, JSON.stringify(history.slice(0, 100))); } catch {} }
+
+function found(text) {
+  const now = Date.now();
+  $("finder").classList.add("hit");
+  setTimeout(() => $("finder").classList.remove("hit"), 450);
+  if (text === last && now - lastAt < 3000) return;  // ignore le même QR lu en boucle
+  last = text; lastAt = now;
+  navigator.vibrate?.(50);
+  showResult(text);
+  history.unshift({ text, at: now });
+  history = history.slice(0, 100);
+  save(); renderHistory();
 }
 
 async function listCams() {
@@ -94,19 +290,24 @@ async function listCams() {
 
 async function start(deviceId) {
   stop();
+  if (!navigator.mediaDevices?.getUserMedia) return cover("Caméra indisponible", "Ce navigateur ne permet pas l'accès à la caméra. Utilise l'import d'image.", true);
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "environment" }
+      video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: "environment" } }
     });
   } catch (e) {
-    return show("Caméra indisponible", e.name === "NotAllowedError"
-      ? "Accès refusé. Autorise la caméra dans le navigateur puis réessaie."
-      : "Impossible d'ouvrir la caméra (" + e.name + ").", true);
+    stream = null;
+    return cover("Caméra indisponible", e.name === "NotAllowedError"
+      ? "Accès refusé. Autorise la caméra dans les réglages du navigateur, puis réessaie."
+      : "Impossible d'ouvrir la caméra. Vérifie qu'aucune autre application ne l'utilise.", true);
   }
   video.srcObject = stream;
-  await video.play();
-  $("idle").hidden = true;
-  $("toggle").textContent = "Couper la caméra";
+  await video.play().catch(() => {});
+  setStatus(true);
+  const track = stream.getVideoTracks()[0];
+  const caps = track.getCapabilities?.() || {};
+  $("torch").hidden = !caps.torch;
+  torchOn = false; $("torch").setAttribute("aria-pressed", "false");
   listCams();
   requestAnimationFrame(tick);
 }
@@ -115,47 +316,66 @@ function stop() {
   stream?.getTracks().forEach(t => t.stop());
   stream = null;
   video.srcObject = null;
-  $("idle").hidden = false;
-  $("toggle").textContent = "Activer la caméra";
+  $("torch").hidden = true;
+  setStatus(false);
+  cover("Prêt à scanner", "Active la caméra et place un QR code dans le cadre.");
 }
 
 function tick() {
   if (!stream) return;
-  if (video.readyState >= 2) {
-    const w = 640, h = Math.round(video.videoHeight * w / video.videoWidth) || 480;
+  if (video.readyState >= 2 && video.videoWidth) {
+    const w = 720, h = Math.round(video.videoHeight * w / video.videoWidth);
     canvas.width = w; canvas.height = h;
     ctx.drawImage(video, 0, 0, w, h);
     const img = ctx.getImageData(0, 0, w, h);
     const code = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
     if (code && code.data) found(code.data);
   }
-  setTimeout(() => requestAnimationFrame(tick), 120);
+  setTimeout(() => requestAnimationFrame(tick), 110);
 }
 
-function found(text) {
-  const now = Date.now();
-  $("frame").classList.add("hit");
-  setTimeout(() => $("frame").classList.remove("hit"), 400);
-  if (text === last && now - lastAt < 3000) return;  // évite les doublons du même QR
-  last = text; lastAt = now;
-  show(/^https?:\/\//i.test(text) ? "Lien" : "Texte", text);
-  navigator.vibrate?.(60);
-  const li = document.createElement("li");
-  const t = document.createElement("time");
-  t.textContent = new Date().toLocaleTimeString("fr-FR");
-  li.append(t, text);
-  $("history").prepend(li);
+function decodeFile(file) {
+  if (!file || !file.type.startsWith("image/")) return toast("Ce fichier n'est pas une image");
+  const img = new Image();
+  img.onload = () => {
+    const s = Math.min(1, 1600 / Math.max(img.width, img.height));
+    canvas.width = Math.round(img.width * s); canvas.height = Math.round(img.height * s);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(img.src);
+    const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(d.data, d.width, d.height, { inversionAttempts: "attemptBoth" });
+    if (code && code.data) { last = ""; found(code.data); } else toast("Aucun QR code trouvé dans l'image");
+  };
+  img.onerror = () => toast("Image illisible");
+  img.src = URL.createObjectURL(file);
 }
 
 $("toggle").addEventListener("click", () => stream ? stop() : start());
+$("startBig").addEventListener("click", () => start());
 $("cams").addEventListener("change", e => start(e.target.value));
-$("copy").addEventListener("click", () => {
-  navigator.clipboard.writeText($("value").textContent).then(() => {
-    $("copy").textContent = "Copié";
-    setTimeout(() => $("copy").textContent = "Copier", 1500);
-  }, () => {});
+$("torch").addEventListener("click", async () => {
+  const track = stream?.getVideoTracks()[0]; if (!track) return;
+  torchOn = !torchOn;
+  try { await track.applyConstraints({ advanced: [{ torch: torchOn }] }); } catch { torchOn = false; }
+  $("torch").setAttribute("aria-pressed", String(torchOn));
 });
-if (!navigator.mediaDevices?.getUserMedia) show("Caméra indisponible", "Ce navigateur ne permet pas l'accès à la caméra ici. Ouvre la page via http://localhost.", true);
+$("file").addEventListener("change", e => { decodeFile(e.target.files[0]); e.target.value = ""; });
+document.addEventListener("paste", e => {
+  const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith("image/"));
+  if (item) decodeFile(item.getAsFile());
+});
+$("copy").addEventListener("click", () => {
+  navigator.clipboard.writeText($("value").textContent).then(() => toast("Copié"), () => {
+    const r = document.createRange(); r.selectNodeContents($("value"));
+    getSelection().removeAllRanges(); getSelection().addRange(r);
+    toast("Texte sélectionné, copie-le manuellement");
+  });
+});
+$("clear").addEventListener("click", () => { history = []; save(); renderHistory(); toast("Historique effacé"); });
+document.addEventListener("visibilitychange", () => { if (document.hidden && stream) stop(); });
+
+renderHistory();
+if (history[0]) showResult(history[0].text);
 </script>
 </body>
 </html>

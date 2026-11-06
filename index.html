@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0e1412">
 <title>Lecteur QR</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Lecteur QR">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
@@ -140,7 +146,7 @@ a.btn { text-decoration: none; color: inherit; }
 .acct-list .name, .acct-list .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acct-list .name { font-weight: 700; font-size: .9rem; }
 .acct-list .sub { font-size: .74rem; color: var(--muted); }
-/* Bouton Sowesoft de chaque compte : lier, se connecter, ou envoyer le scan affiché */
+/* Bouton SoWeSign de chaque compte : lier, se connecter, ou envoyer le scan affiché */
 .sws { flex: none; font-size: .72rem; font-weight: 800; padding: 5px 10px; border-radius: 999px; cursor: pointer;
   border: 1px dashed var(--line); background: var(--surface); color: var(--muted); }
 .sws.linked { border-style: solid; border-color: var(--accent); color: var(--accent); }
@@ -180,6 +186,8 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
   color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; }
 .tree .x:hover { background: var(--warn-soft); color: var(--warn); }
 .link:disabled { opacity: .4; cursor: default; }
+.keep { margin: 0; font-size: .8rem; color: var(--muted); padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
+.keep.ok { color: var(--accent); background: var(--accent-soft); }
 .tree .toggle { display: inline-flex; align-items: center; gap: 6px; }
 .tree .toggle svg { width: 16px; height: 16px; flex: none; }
 @media (max-width: 520px) { .tree .toggle span { display: none; } .tree .toggle { padding: 7px; } }
@@ -207,11 +215,12 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
         <button class="link" id="acctClose" type="button">Fermer</button>
       </div>
       <ul class="tree" id="acctTree"></ul>
+      <p class="keep" id="keepNote" hidden></p>
       <form class="add" id="acctForm">
         <span class="eyebrow">Connecter un autre compte</span>
         <label>Nom <input id="acctNew" required maxlength="40" placeholder="Ex. Agence Lyon, Marie…" autocomplete="off"></label>
         <label>Branche <select id="acctParent"></select></label>
-        <label>Lien Sowesoft (optionnel) <input id="acctSws" type="text" inputmode="url" placeholder="https://…  ({scan} = contenu scanné)" autocomplete="off"></label>
+        <label>Lien SoWeSign <input id="acctSws" type="text" inputmode="url" placeholder="https://app.sowesign.com/ (par défaut)" autocomplete="off"></label>
         <button class="btn primary" type="submit">Connecter</button>
       </form>
     </div>
@@ -298,7 +307,7 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
     </aside>
   </main>
 
-  <p class="foot">Tout est traité sur cet appareil. Rien ne part vers Sowesoft sans un clic sur « Envoyer ».</p>
+  <p class="foot">Tout est traité sur cet appareil. Rien ne part vers SoWeSign sans un clic sur « Envoyer ».</p>
 </div>
 <div class="toast" id="toast" role="status"></div>
 
@@ -309,6 +318,7 @@ const video = $("video"), canvas = document.createElement("canvas");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 const KEY = "lecteur-qr-historique";   // historique d'avant les comptes : repris par le premier compte
 const ACCTS = "lecteur-qr-comptes";
+const SWS = "https://app.sowesign.com/";   // lien SoWeSign par défaut de chaque compte
 const COLORS = ["#0b7a5a", "#2f6fde", "#b0451a", "#8a3fd1", "#c2185b", "#00838f", "#7a6a00"];
 let stream = null, last = "", lastAt = 0, torchOn = false;
 let history = [], accounts = [];
@@ -328,7 +338,8 @@ function loadAccounts() {
     writeJSON(histKey(id), readJSON(KEY) || []);
     try { localStorage.removeItem(KEY); } catch {}
   }
-  accounts.forEach(a => { a.connected ??= true; a.since ??= Date.now(); });  // comptes créés avant l'état de connexion
+  // Comptes créés avant l'état de connexion ou le lien SoWeSign ("" = lien retiré volontairement)
+  accounts.forEach(a => { a.connected ??= true; a.since ??= Date.now(); a.sws ??= SWS; });
   keepOneConnected();
   saveAccounts();
 }
@@ -380,7 +391,7 @@ function avatar(a) {
   return el;
 }
 
-// Sowesoft : chaque compte peut avoir son lien de connexion. Sans API, « envoyer » copie le scan
+// SoWeSign : chaque compte peut avoir son lien de connexion. Sans API, « envoyer » copie le scan
 // et ouvre ce lien ; {scan} dans le lien est remplacé par le contenu scanné.
 function cleanUrl(v) {
   v = v.trim(); if (!v) return "";
@@ -388,20 +399,23 @@ function cleanUrl(v) {
   try { const u = new URL(v.replace("{scan}", "")); return /^https?:$/.test(u.protocol) ? v : null; } catch { return null; }
 }
 function editSws(a) {
-  const v = prompt("Lien Sowesoft pour « " + a.name + " » (vide pour retirer).\n{scan} dans le lien sera remplacé par le contenu scanné.", a.sws || "");
+  const v = prompt("Lien SoWeSign pour « " + a.name + " » (vide pour retirer).\n{scan} dans le lien sera remplacé par le contenu scanné.", a.sws || "");
   if (v === null) return;
   const url = cleanUrl(v);
   if (url === null) return toast("Lien invalide");
-  if (url) a.sws = url; else delete a.sws;
+  a.sws = url;
   refresh();
-  toast(url ? "Sowesoft lié à « " + a.name + " »" : "Sowesoft retiré de « " + a.name + " »");
+  toast(url ? "SoWeSign lié à « " + a.name + " »" : "SoWeSign retiré de « " + a.name + " »");
 }
 const currentScan = () => $("value").hidden ? "" : $("value").textContent;
 function openSws(a) {
   const scan = currentScan();
-  window.open(a.sws.replaceAll("{scan}", encodeURIComponent(scan)), "_blank", "noopener");
+  // Un QR SoWeSign (lien vers le même site que le compte) est ouvert tel quel ; sinon on ouvre le lien du compte
+  let target = a.sws.replaceAll("{scan}", encodeURIComponent(scan));
+  try { if (new URL(scan).origin === new URL(target).origin) target = scan; } catch {}
+  window.open(target, "_blank", "noopener");
   if (scan) navigator.clipboard?.writeText(scan).catch(() => {});
-  toast(scan ? "Scan copié, Sowesoft ouvert pour « " + a.name + " »" : "Sowesoft ouvert pour « " + a.name + " »");
+  toast(scan ? "Scan copié, SoWeSign ouvert pour « " + a.name + " »" : "SoWeSign ouvert pour « " + a.name + " »");
 }
 
 const scansText = a => { const n = (readJSON(histKey(a.id)) || []).length; return n + " scan" + (n > 1 ? "s" : ""); };
@@ -422,13 +436,13 @@ function renderAccounts() {
     const sw = document.createElement("button");
     sw.type = "button";
     if (!a.sws) {
-      sw.className = "sws"; sw.textContent = "Lier Sowesoft";
+      sw.className = "sws"; sw.textContent = "Lier SoWeSign";
       sw.addEventListener("click", () => editSws(a));
     } else {
       const send = !!currentScan();
       sw.className = "sws linked" + (send ? " send" : "");
-      sw.textContent = send ? "Envoyer" : "Sowesoft";
-      sw.title = send ? "Copier le scan et ouvrir Sowesoft pour ce compte" : "Se connecter à Sowesoft pour ce compte";
+      sw.textContent = send ? "Envoyer" : "SoWeSign";
+      sw.title = send ? "Copier le scan et ouvrir SoWeSign pour ce compte" : "Se connecter à SoWeSign pour ce compte";
       sw.addEventListener("click", () => openSws(a));
     }
     li.append(avatar(a), who, sw);
@@ -450,13 +464,13 @@ function renderAccounts() {
     const n = document.createElement("span"); n.className = "name"; n.textContent = a.name;
     const s = document.createElement("span"); s.className = "sub" + (a.connected ? " on" : "");
     s.textContent = (a.connected ? "Connecté depuis " + sinceText(a.since) : "Déconnecté") + " · " + scansText(a)
-      + (a.sws ? " · Sowesoft lié" : "");
+      + (a.sws ? " · SoWeSign lié" : "");
     who.append(n, s);
     b.append(br, avatar(a), who);
     const l = document.createElement("button");
-    l.type = "button"; l.className = "link toggle"; l.title = a.sws ? "Modifier le lien Sowesoft" : "Lier Sowesoft";
+    l.type = "button"; l.className = "link toggle"; l.title = a.sws ? "Modifier le lien SoWeSign" : "Lier SoWeSign";
     l.setAttribute("aria-label", l.title + " de " + a.name);
-    l.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg><span>Sowesoft</span>';
+    l.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg><span>SoWeSign</span>';
     if (a.sws) l.style.color = "var(--accent)";
     l.addEventListener("click", () => editSws(a));
     const t = document.createElement("button");
@@ -479,6 +493,20 @@ function renderAccounts() {
   });
 }
 
+// Garder les comptes connectés : on demande au navigateur de ne jamais effacer les données de l'app
+// (sinon Safari les supprime après 7 jours sans visite). Installée sur l'écran d'accueil, l'app est aussi protégée.
+let kept = null;
+async function keepConnected() {
+  try { kept = await navigator.storage.persisted() || await navigator.storage.persist(); } catch { kept = null; }
+  const installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  const note = $("keepNote");
+  note.hidden = false;
+  note.classList.toggle("ok", !!(kept || installed));
+  note.textContent = kept || installed
+    ? "Les comptes restent connectés en permanence sur cet appareil."
+    : "Pour que les comptes restent connectés en permanence, ajoute l'app à l'écran d'accueil (menu du navigateur › « Ajouter à l'écran d'accueil »).";
+}
+
 function refresh() {
   saveAccounts();
   loadHistory();
@@ -488,7 +516,7 @@ function refresh() {
 function addAccount(name, parent, sws) {
   const id = crypto.randomUUID?.() || String(Date.now());
   accounts.push({ id, name, parent: parent || null, color: COLORS[accounts.length % COLORS.length], connected: true, since: Date.now(),
-    ...(sws ? { sws } : {}) });
+    sws: sws || SWS });
   refresh();
   toast("« " + name + " » connecté");
 }
@@ -558,7 +586,7 @@ function showResult(text) {
   const open = $("open");
   open.hidden = kind !== "Lien";
   if (kind === "Lien") open.href = text; else open.removeAttribute("href");
-  renderAccounts();  // les boutons Sowesoft passent en « Envoyer »
+  renderAccounts();  // les boutons SoWeSign passent en « Envoyer »
 }
 
 function clearResult() {
@@ -815,14 +843,14 @@ $("clear").addEventListener("click", () => {
 });
 document.addEventListener("visibilitychange", () => { if (document.hidden && stream) stop(); });
 
-$("acctManage").addEventListener("click", () => { renderAccounts(); $("acctDialog").showModal(); });
+$("acctManage").addEventListener("click", () => { renderAccounts(); keepConnected(); $("acctDialog").showModal(); });
 $("acctClose").addEventListener("click", () => $("acctDialog").close());
 $("acctDialog").addEventListener("click", e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 $("acctForm").addEventListener("submit", e => {
   e.preventDefault();
   const name = $("acctNew").value.trim(); if (!name) return;
   const sws = cleanUrl($("acctSws").value);
-  if (sws === null) return toast("Lien Sowesoft invalide");
+  if (sws === null) return toast("Lien SoWeSign invalide");
   addAccount(name, $("acctParent").value, sws);
   $("acctNew").value = ""; $("acctSws").value = "";
   $("acctDialog").close();
@@ -837,6 +865,7 @@ addEventListener("storage", e => {
 renderAccounts();
 renderHistory();
 if (history[0]) showResult(history[0].text);
+keepConnected();
 </script>
 </body>
 </html>

@@ -1,0 +1,150 @@
+// Lecteur QR → SoWeSign
+// Reçoit le code scanné (adresse « #lqr=CODE » ou « ?lqr=CODE », ou collé à la main) et le met dans le champ
+// que tu as choisi. Il ne valide jamais : c'est toi qui envoies le formulaire SoWeSign.
+(() => {
+  const ext = typeof browser !== "undefined" ? browser : chrome;
+  const store = ext.storage.local;
+  const FIELD = "lqrField", PENDING = "lqrPending", TTL = 10 * 60 * 1000;
+  const CODE = /^[\w.-]{1,64}$/;   // un code simple : jamais de lien ni de texte libre
+  const FILLABLE = "input:not([type]), input[type=text], input[type=tel], input[type=number], input[type=search], textarea";
+
+  let pending = null, field = null, choosing = false, open = false, message = "";
+  let host, root;
+  const q = s => { try { return document.querySelector(s); } catch { return null; } };
+  const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+
+  // Le code arrive dans l'adresse : on le garde, puis on le retire de la barre d'adresse
+  function takeFromUrl() {
+    const u = new URL(location.href), h = new URLSearchParams(u.hash.slice(1));
+    const code = h.get("lqr") ?? u.searchParams.get("lqr");
+    if (code === null) return null;
+    h.delete("lqr"); u.searchParams.delete("lqr"); u.hash = h.toString();
+    history.replaceState(history.state, "", u.href);
+    return CODE.test(code) ? code : null;
+  }
+
+  function selectorOf(node) {
+    if (node.id && document.querySelectorAll("#" + CSS.escape(node.id)).length === 1) return "#" + CSS.escape(node.id);
+    if (node.name) {
+      const s = node.tagName.toLowerCase() + '[name="' + CSS.escape(node.name) + '"]';
+      if (document.querySelectorAll(s).length === 1) return s;
+    }
+    const path = [];
+    for (let n = node; n && n !== document.body; n = n.parentElement) {
+      const same = [...n.parentElement.children].filter(c => c.tagName === n.tagName);
+      path.unshift(n.tagName.toLowerCase() + (same.length > 1 ? ":nth-of-type(" + (same.indexOf(n) + 1) + ")" : ""));
+    }
+    return "body > " + path.join(" > ");
+  }
+
+  // Passe par le setter natif : sinon React ou Vue ne voient pas la valeur
+  function fill(input, value) {
+    const proto = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // Ne remplit que le champ choisi, sur la page où il a été choisi : jamais les champs de connexion au hasard
+  async function autofill() {
+    if (!pending || !field || field.path !== location.pathname) return false;
+    const input = q(field.selector);
+    if (!input || input.disabled || input.readOnly) return false;
+    const code = pending.code;
+    fill(input, code);
+    pending = null; open = true;
+    message = "Code « " + code + " » rempli. Vérifie, puis envoie toi-même.";
+    await store.remove(PENDING);
+    render();
+    return true;
+  }
+
+  async function setPending(code) {
+    if (!CODE.test(code)) { message = "Ce n'est pas un code simple (lettres, chiffres, - _ .)."; open = true; return render(); }
+    pending = { code, at: Date.now() };
+    message = ""; open = true;
+    await store.set({ [PENDING]: pending });
+    if (!(await autofill())) render();
+  }
+
+  async function paste() {
+    try { await setPending((await navigator.clipboard.readText()).trim()); }
+    catch { message = "Le navigateur refuse l'accès au presse-papiers : colle le code dans la case."; render(); }
+  }
+
+  function render() {
+    if (!root) return;
+    const kids = [el("button", { className: "head", textContent: "Lecteur QR" + (pending ? " · code reçu" : ""), onclick: () => { open = !open; render(); } })];
+    if (open) {
+      const body = el("div", { className: "body" });
+      body.append(
+        el("p", { textContent: pending ? "Code reçu : " + pending.code : "Aucun code en attente." }),
+        el("p", { className: "muted", textContent: message || (field
+          ? "Champ choisi : le code s'y remplit tout seul."
+          : "Aucun champ choisi : rien n'est rempli tant que tu n'as pas cliqué sur « Choisir le champ ».") }));
+      if (pending && field) body.append(el("button", { className: "b main", textContent: "Remplir maintenant", onclick: autofill }));
+      body.append(el("button", { className: "b" + (choosing ? " main" : ""), textContent: choosing ? "Clique sur le champ du code…" : "Choisir le champ",
+        onclick: () => { choosing = !choosing; message = ""; render(); } }));
+      if (field) body.append(el("button", { className: "b", textContent: "Oublier le champ",
+        onclick: async () => { field = null; message = "Champ oublié."; await store.remove(FIELD); render(); } }));
+      body.append(
+        el("input", { placeholder: "Colle le code ici", onchange: e => { setPending(e.target.value.trim()); e.target.value = ""; } }),
+        el("button", { className: "b", textContent: "Lire le presse-papiers", onclick: paste }));
+      kids.push(body);
+    }
+    root.replaceChildren(STYLE, el("div", { className: "box" }, ...kids));
+  }
+
+  const STYLE = el("style", { textContent: `
+    :host { all: initial }
+    .box { position: fixed; right: 12px; bottom: 12px; z-index: 2147483647; width: 270px; overflow: hidden; background: #fff; color: #121a17;
+      font: 14px/1.4 system-ui, sans-serif; border: 1px solid #0b7a5a; border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.25) }
+    .head { display: block; width: 100%; padding: 9px 12px; border: 0; background: #0b7a5a; color: #fff; font: inherit; font-weight: 700; text-align: left; cursor: pointer }
+    .body { display: grid; gap: 8px; padding: 12px }
+    p { margin: 0; word-break: break-all } .muted { color: #5f6d68; font-size: 12px; word-break: normal }
+    .b { padding: 7px 10px; border: 1px solid #0b7a5a; border-radius: 9px; background: #fff; color: #0b7a5a; font: inherit; font-weight: 700; cursor: pointer }
+    .b.main { background: #0b7a5a; color: #fff }
+    input { padding: 7px 10px; border: 1px solid #cfd8d4; border-radius: 9px; font: inherit; color: #121a17; background: #fff }` });
+
+  function mount() {
+    host = el("div", { id: "lqr-host" });
+    root = host.attachShadow({ mode: "open" });
+    document.documentElement.append(host);
+    render();
+  }
+
+  // Choisir le champ : le prochain clic sur un champ texte de la page est retenu
+  document.addEventListener("click", async e => {
+    if (!choosing || (host && e.composedPath().includes(host))) return;
+    const target = e.target.closest?.(FILLABLE);
+    choosing = false;
+    if (!target) { message = "Ce n'est pas un champ texte. Réessaie."; return render(); }
+    field = { path: location.pathname, selector: selectorOf(target) };
+    message = "Champ enregistré.";
+    await store.set({ [FIELD]: field });
+    if (!(await autofill())) render();
+  }, true);
+
+  // Les pages SoWeSign se construisent après coup : on réessaie à chaque changement, tant qu'un code attend
+  let timer;
+  new MutationObserver(() => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (!pending) return;
+      if (Date.now() - pending.at > TTL) { pending = null; store.remove(PENDING); return render(); }
+      autofill();
+    }, 250);
+  }).observe(document, { childList: true, subtree: true });
+
+  (async () => {
+    const fromUrl = takeFromUrl();
+    const saved = await store.get([FIELD, PENDING]);
+    field = saved[FIELD] || null;
+    if (fromUrl) { pending = { code: fromUrl, at: Date.now() }; await store.set({ [PENDING]: pending }); }
+    else if (saved[PENDING] && Date.now() - saved[PENDING].at < TTL) pending = saved[PENDING];
+    else if (saved[PENDING]) store.remove(PENDING);
+    open = !!pending;
+    mount();
+    autofill();
+  })();
+})();

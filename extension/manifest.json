@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Lecteur QR → SoWeSign",
+  "version": "1.0.0",
+  "description": "Remplit dans SoWeSign le code scanné par le Lecteur QR. Ne valide jamais à ta place.",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://app.sowesign.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": { "id": "lecteur-qr@aurelien-labro.github.io" }
+  }
+}

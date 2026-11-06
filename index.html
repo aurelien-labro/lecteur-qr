@@ -429,12 +429,24 @@ const BROWSERS = [["", "Ce navigateur"], ["com.android.chrome", "Chrome"], ["org
 const isAndroid = /Android/i.test(navigator.userAgent);
 const browserName = a => (BROWSERS.find(([p]) => p === a.browser) || BROWSERS[0])[1];
 
-function launch(url, a) {
+const intentUrl = (url, pkg) => {
   const u = new URL(url);
-  if (a.browser && isAndroid && !u.hash) {
-    location.href = "intent://" + u.host + u.pathname + u.search + "#Intent;scheme=" + u.protocol.slice(0, -1)
-      + ";package=" + a.browser + ";S.browser_fallback_url=" + encodeURIComponent(url) + ";end";
-  } else window.open(url, "_blank", "noopener");
+  return "intent://" + u.host + u.pathname + u.search + "#Intent;scheme=" + u.protocol.slice(0, -1)
+    + ";package=" + pkg + ";S.browser_fallback_url=" + encodeURIComponent(url) + ";end";
+};
+const usesIntent = a => !!(a.browser && isAndroid);
+function launch(url, a) {
+  if (usesIntent(a) && !new URL(url).hash) location.href = intentUrl(url, a.browser);
+  else window.open(url, "_blank", "noopener");
+}
+
+// Un simple code (pas un lien) est transmis à l'extension du navigateur : dans l'adresse (#lqr=), ou ?lqr= pour un
+// lien Android, qui ne peut pas porter de #. L'extension le remplit dans le champ choisi, sans jamais valider.
+const isCode = s => /^[\w.-]{1,64}$/.test(s);
+function withCode(url, code, viaIntent) {
+  const u = new URL(url);
+  if (viaIntent) u.searchParams.set("lqr", code); else u.hash = "lqr=" + encodeURIComponent(code);
+  return u.href;
 }
 
 // Comptes dont le mot-clé de reconnaissance apparaît dans le QR (plusieurs mots-clés séparés par des virgules)
@@ -455,6 +467,7 @@ function editSws(a) {
   $("swsHint").textContent = isAndroid
     ? "Choisis un navigateur différent pour chaque compte : chacun garde sa session SoWeSign, tous restent connectés en même temps. Connecte-toi une fois dans chaque navigateur en cochant « rester connecté »."
     : "Le choix du navigateur ne fonctionne que sur Android. Sur ordinateur, utilise un profil de navigateur par compte.";
+  $("swsHint").textContent += " Pour que le code scanné se remplisse tout seul, installe l'extension du dossier « extension » dans ce navigateur.";
   $("acctForm").hidden = true; $("swsForm").hidden = false;
   if (!$("acctDialog").open) { renderAccounts(); keepConnected(); $("acctDialog").showModal(); }
   $("swsForm").scrollIntoView({ block: "nearest" });
@@ -467,6 +480,7 @@ function openSws(a) {
   // Un QR SoWeSign (lien vers le même site que le compte) est ouvert tel quel ; sinon on ouvre le lien du compte
   let target = a.sws.replaceAll("{scan}", encodeURIComponent(scan));
   try { if (new URL(scan).origin === new URL(target).origin) target = scan; } catch {}
+  if (isCode(scan) && !a.sws.includes("{scan}")) target = withCode(target, scan, usesIntent(a));
   launch(target, a);
   if (scan) navigator.clipboard?.writeText(scan).catch(() => {});
   toast("SoWeSign ouvert pour « " + a.name + " »" + (a.browser && isAndroid ? " dans " + browserName(a) : ""));

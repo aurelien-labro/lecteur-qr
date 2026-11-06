@@ -1,9 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Lecteur QR → SoWeSign",
-  "version": "1.0.0",
-  "description": "Remplit dans SoWeSign le code scanné par le Lecteur QR. Ne valide jamais à ta place.",
-  "permissions": ["storage"],
+  "version": "1.1.0",
+  "description": "Remplit dans SoWeSign le code scanné par le Lecteur QR et prévient quand la session tombe. Ne valide jamais, ne se connecte jamais.",
+  "permissions": ["storage", "notifications"],
+  "icons": { "192": "icon.png" },
+  "action": { "default_title": "Lecteur QR → SoWeSign", "default_icon": { "192": "icon.png" } },
+  "background": { "service_worker": "background.js", "scripts": ["background.js"] },
   "content_scripts": [
     {
       "matches": ["https://app.sowesign.com/*"],
